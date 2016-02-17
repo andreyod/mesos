@@ -1511,6 +1511,7 @@ message ContainerInfo {
       HOST = 1;
       BRIDGE = 2;
       NONE = 3;
+      USER = 4;
     }
 
     optional Network network = 2 [default = HOST];
@@ -1539,6 +1540,9 @@ message ContainerInfo {
 
     // The name of volume driver plugin.
     optional string volume_driver = 7;
+
+    // Network name for user-defined network.
+    optional string network_name = 8;
   }
 
   message MesosInfo {

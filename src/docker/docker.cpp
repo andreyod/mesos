@@ -301,7 +301,8 @@ Try<Docker::Container> Docker::Container::create(const string& output)
 
   bool started = startedAtValue.get().value != "0001-01-01T00:00:00Z";
 
-  Result<JSON::String> networkModeValue = json.find<JSON::String>("HostConfig.NetworkMode");
+  Result<JSON::String> networkModeValue =
+                       json.find<JSON::String>("HostConfig.NetworkMode");
   if (networkModeValue.isNone()) {
       return Error("Unable to find HostConfig.NetworkMode in container");
   } else if (networkModeValue.isError()) {
@@ -313,11 +314,13 @@ Try<Docker::Container> Docker::Container::create(const string& output)
 
   Result<JSON::String> ipAddressValue = None();
   // for backward compatibility
-  if (networkMode == "host" || networkMode == "none" || networkMode == "bridge" ||
-		                            networkMode == "default" || networkMode == "") {
-	  ipAddressValue = json.find<JSON::String>("NetworkSettings.IPAddress");
+  if (networkMode == "host" || networkMode == "none" ||
+          networkMode == "bridge" || networkMode == "default" ||
+                                              networkMode == "") {
+      ipAddressValue = json.find<JSON::String>("NetworkSettings.IPAddress");
   } else {
-	  ipAddressValue = json.find<JSON::String>("NetworkSettings.Networks." + networkMode + ".IPAddress");
+      ipAddressValue = json.find<JSON::String>("NetworkSettings.Networks." +
+                                                 networkMode + ".IPAddress");
   }
 
   if (ipAddressValue.isNone()) {
@@ -531,11 +534,26 @@ Future<Nothing> Docker::run(
   argv.push_back("--net");
   string network;
   switch (dockerInfo.network()) {
-    case ContainerInfo::DockerInfo::HOST: network = "host"; break;
-    case ContainerInfo::DockerInfo::BRIDGE: network = "bridge"; break;
-    case ContainerInfo::DockerInfo::NONE: network = "none"; break;
-    default: return Failure("Unsupported Network mode: " +
-                            stringify(dockerInfo.network()));
+      case ContainerInfo::DockerInfo::HOST: network = "host"; break;
+      case ContainerInfo::DockerInfo::BRIDGE: network = "bridge"; break;
+      case ContainerInfo::DockerInfo::NONE: network = "none"; break;
+      case ContainerInfo::DockerInfo::USER: {
+             // user defined networks require docker version >= 1.9.0
+             Try<Nothing> validateVersion =
+               this->validateVersion(Version(1, 9, 0));
+             if (validateVersion.isError()) {
+                return Failure("User defined networks require Docker "
+                               "version 1.9.0 or higher");
+             }
+           }
+           if (!dockerInfo.has_network_name() ||
+             dockerInfo.network_name() == "") {
+             return Failure("Network mode is USER but network_name is empty");
+           }
+           network = dockerInfo.network_name();
+           break;
+      default: return Failure("Unsupported Network mode: " +
+                              stringify(dockerInfo.network()));
   }
 
   argv.push_back(network);
@@ -554,7 +572,7 @@ Future<Nothing> Docker::run(
   }
 
   if (dockerInfo.port_mappings().size() > 0) {
-    if (network != "bridge") {
+    if (network == "host" || network == "none"  ) {
       return Failure("Port mappings are only supported for bridge network");
     }
 
