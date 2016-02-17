@@ -301,13 +301,30 @@ Try<Docker::Container> Docker::Container::create(const string& output)
 
   bool started = startedAtValue.get().value != "0001-01-01T00:00:00Z";
 
-  Result<JSON::String> ipAddressValue =
-    json.find<JSON::String>("NetworkSettings.IPAddress");
+  Result<JSON::String> networkModeValue = json.find<JSON::String>("HostConfig.NetworkMode");
+  if (networkModeValue.isNone()) {
+      return Error("Unable to find HostConfig.NetworkMode in container");
+  } else if (networkModeValue.isError()) {
+      return Error(
+          "Error finding HostConfig.NetworkMode in container: " +
+          networkModeValue.error());
+  }
+  string networkMode = networkModeValue.get().value;
+
+  Result<JSON::String> ipAddressValue = None();
+  // for backward compatibility
+  if (networkMode == "host" || networkMode == "none" || networkMode == "bridge" ||
+		                            networkMode == "default" || networkMode == "") {
+	  ipAddressValue = json.find<JSON::String>("NetworkSettings.IPAddress");
+  } else {
+	  ipAddressValue = json.find<JSON::String>("NetworkSettings.Networks." + networkMode + ".IPAddress");
+  }
+
   if (ipAddressValue.isNone()) {
-    return Error("Unable to find NetworkSettings.IPAddress in container");
+      return Error("Unable to find NetworkSettings.IPAddress in container");
   } else if (ipAddressValue.isError()) {
-    return Error(
-        "Error finding NetworkSettings.Name in container: " +
+      return Error(
+        "Error finding NetworkSettings.IPAddress in container: " +
         ipAddressValue.error());
   }
 
