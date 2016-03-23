@@ -550,6 +550,24 @@ Future<Nothing> Docker::run(
     case ContainerInfo::DockerInfo::HOST: network = "host"; break;
     case ContainerInfo::DockerInfo::BRIDGE: network = "bridge"; break;
     case ContainerInfo::DockerInfo::NONE: network = "none"; break;
+    case ContainerInfo::DockerInfo::USER: {
+          // user defined networks require docker version >= 1.9.0
+          Try<Nothing> validateVersion =
+                       this->validateVersion(Version(1, 9, 0));
+          if (validateVersion.isError()) {
+             return Failure("User defined networks require Docker "
+                                        " version 1.9.0 or higher");
+          }
+          if (containerInfo.network_infos_size() == 0) {
+              return Failure("No network info found in container info");
+          }
+          const NetworkInfo& networkInfo = containerInfo.network_infos(0);
+          if(!networkInfo.has_name()){
+              return Failure("No network name found in network info");
+          }
+          network = networkInfo.name();
+        }
+        break;
     default: return Failure("Unsupported Network mode: " +
                             stringify(dockerInfo.network()));
   }
@@ -570,7 +588,7 @@ Future<Nothing> Docker::run(
   }
 
   if (dockerInfo.port_mappings().size() > 0) {
-    if (network != "bridge") {
+    if (network == "host" || network == "none") {
       return Failure("Port mappings are only supported for bridge network");
     }
 
