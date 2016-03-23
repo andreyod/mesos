@@ -537,23 +537,33 @@ Future<Nothing> Docker::run(
       case ContainerInfo::DockerInfo::HOST: network = "host"; break;
       case ContainerInfo::DockerInfo::BRIDGE: network = "bridge"; break;
       case ContainerInfo::DockerInfo::NONE: network = "none"; break;
-      case ContainerInfo::DockerInfo::USER: {
-             // user defined networks require docker version >= 1.9.0
-             Try<Nothing> validateVersion =
-               this->validateVersion(Version(1, 9, 0));
-             if (validateVersion.isError()) {
-                return Failure("User defined networks require Docker "
-                               "version 1.9.0 or higher");
-             }
-           }
-           if (!dockerInfo.has_network_name() ||
-             dockerInfo.network_name() == "") {
-             return Failure("Network mode is USER but network_name is empty");
-           }
-           network = dockerInfo.network_name();
-           break;
-      default: return Failure("Unsupported Network mode: " +
-                              stringify(dockerInfo.network()));
+//      case ContainerInfo::DockerInfo::USER: {
+//             // user defined networks require docker version >= 1.9.0
+//             Try<Nothing> validateVersion =
+//               this->validateVersion(Version(1, 9, 0));
+//             if (validateVersion.isError()) {
+//                return Failure("User defined networks require Docker "
+//                               "version 1.9.0 or higher");
+//             }
+//           }
+//           if (!dockerInfo.has_network_name() ||
+//             dockerInfo.network_name() == "") {
+//             return Failure("Network mode is USER but network_name is empty");
+//          }
+//           network = dockerInfo.network_name();
+//           break;
+//      default: return Failure("Unsupported Network mode: " +
+//                              stringify(dockerInfo.network()));
+     default:
+        LOG(INFO) << "!!!!!!!!!!!------- In default ";
+        // docker supports only one network on container create
+        // use first NetworkInfo to get network name.
+        const NetworkInfo& networkInfo = containerInfo.network_infos(0);
+        if(!networkInfo.has_name()){
+            return Failure("Network name or network mode is required.");
+        }
+        network = networkInfo.name();
+        LOG(INFO) << "!!!!!!!!!!!------- Network name: " << network;
   }
 
   argv.push_back(network);
