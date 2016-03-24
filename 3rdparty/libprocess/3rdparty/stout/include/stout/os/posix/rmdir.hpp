@@ -21,6 +21,8 @@
 #include <stout/nothing.hpp>
 #include <stout/try.hpp>
 
+#include <stout/os/exists.hpp>
+
 
 namespace os {
 
@@ -35,6 +37,14 @@ inline Try<Nothing> rmdir(const std::string& directory, bool recursive = true)
       return ErrnoError();
     }
   } else {
+    // NOTE: `fts_open` will not always return `NULL` if the path does not
+    // exist. We manually induce an error here to indicate that we can't remove
+    // a directory that does not exist.
+    if (!os::exists(directory)) {
+      errno = ENOENT;
+      return ErrnoError();
+    }
+
     char* paths[] = {const_cast<char*>(directory.c_str()), NULL};
 
     FTS* tree = fts_open(paths, FTS_NOCHDIR, NULL);
@@ -52,8 +62,14 @@ inline Try<Nothing> rmdir(const std::string& directory, bool recursive = true)
             return error;
           }
           break;
+        // `FTS_DEFAULT` would include any file type which is not
+        // explicitly described by any of the other `fts_info` values.
+        case FTS_DEFAULT:
         case FTS_F:
         case FTS_SL:
+        // `FTS_SLNONE` should never be the case as we dont set
+        // FTS_COMFOLLOW. Adding here for completion.
+        case FTS_SLNONE:
           if (::unlink(node->fts_path) < 0 && errno != ENOENT) {
             Error error = ErrnoError();
             fts_close(tree);

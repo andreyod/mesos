@@ -93,6 +93,8 @@ public:
       healthPid(-1),
       escalationTimeout(slave::EXECUTOR_SIGNAL_ESCALATION_TIMEOUT),
       driver(None()),
+      frameworkInfo(None()),
+      taskId(None()),
       healthCheckDir(_healthCheckDir),
       override(override),
       sandboxDirectory(_sandboxDirectory),
@@ -105,13 +107,16 @@ public:
   void registered(
       ExecutorDriver* _driver,
       const ExecutorInfo& _executorInfo,
-      const FrameworkInfo& frameworkInfo,
+      const FrameworkInfo& _frameworkInfo,
       const SlaveInfo& slaveInfo)
   {
     CHECK_EQ(REGISTERING, state);
 
     cout << "Registered executor on " << slaveInfo.hostname() << endl;
+
     driver = _driver;
+    frameworkInfo = _frameworkInfo;
+
     state = REGISTERED;
   }
 
@@ -122,6 +127,7 @@ public:
     CHECK(state == REGISTERED || state == REGISTERING) << state;
 
     cout << "Re-registered executor on " << slaveInfo.hostname() << endl;
+
     state = REGISTERED;
   }
 
@@ -141,6 +147,9 @@ public:
       driver->sendStatusUpdate(status);
       return;
     }
+
+    // Capture the TaskID.
+    taskId = task.task_id();
 
     // Determine the command to launch the task.
     CommandInfo command;
@@ -394,7 +403,6 @@ public:
 #endif // __linux__
       }
 
-
       cout << commandString << endl;
 
       // The child has successfully setsid, now run the command.
@@ -434,16 +442,13 @@ public:
 
     cout << "Forked command at " << pid << endl;
 
-    launchHealthCheck(task);
+    if (task.has_health_check()) {
+      launchHealthCheck(task);
+    }
 
     // Monitor this process.
     process::reap(pid)
-      .onAny(defer(self(),
-                   &Self::reaped,
-                   driver,
-                   task.task_id(),
-                   pid,
-                   lambda::_1));
+      .onAny(defer(self(), &Self::reaped, driver, pid, lambda::_1));
 
     TaskStatus status;
     status.mutable_task_id()->MergeFrom(task.task_id());
@@ -455,11 +460,11 @@ public:
 
   void killTask(ExecutorDriver* driver, const TaskID& taskId)
   {
+    cout << "Received killTask" << endl;
+
+    // Since the command executor manages a single task, we
+    // shutdown completely when we receive a killTask.
     shutdown(driver);
-    if (healthPid != -1) {
-      // Cleanup health check process.
-      os::killtree(healthPid, SIGKILL);
-    }
   }
 
   void frameworkMessage(ExecutorDriver* driver, const string& data) {}
@@ -468,22 +473,39 @@ public:
   {
     cout << "Shutting down" << endl;
 
-    if (pid > 0 && !killed) {
-      cout << "Sending SIGTERM to process tree at pid "
-           << pid << endl;
+    if (launched && !killed) {
+      // Send TASK_KILLING if the framework can handle it.
+      CHECK_SOME(frameworkInfo);
+      CHECK_SOME(taskId);
+
+      foreach (const FrameworkInfo::Capability& c,
+               frameworkInfo->capabilities()) {
+        if (c.type() == FrameworkInfo::Capability::TASK_KILLING_STATE) {
+          TaskStatus status;
+          status.mutable_task_id()->CopyFrom(taskId.get());
+          status.set_state(TASK_KILLING);
+          driver->sendStatusUpdate(status);
+          break;
+        }
+      }
+
+      // Now perform signal escalation to begin killing the task.
+      CHECK_GT(pid, 0);
+
+      cout << "Sending SIGTERM to process tree at pid " << pid << endl;
 
       Try<std::list<os::ProcessTree> > trees =
         os::killtree(pid, SIGTERM, true, true);
 
       if (trees.isError()) {
-        cerr << "Failed to kill the process tree rooted at pid "
-             << pid << ": " << trees.error() << endl;
+        cerr << "Failed to kill the process tree rooted at pid " << pid
+             << ": " << trees.error() << endl;
 
         // Send SIGTERM directly to process 'pid' as it may not have
         // received signal before os::killtree() failed.
         ::kill(pid, SIGTERM);
       } else {
-        cout << "Killing the following process trees:\n"
+        cout << "Sent SIGTERM to the following process trees:\n"
              << stringify(trees.get()) << endl;
       }
 
@@ -495,6 +517,16 @@ public:
           &Self::escalated);
 
       killed = true;
+    }
+
+    // Cleanup health check process.
+    //
+    // TODO(bmahler): Consider doing this after the task has been
+    // reaped, since a framework may be interested in health
+    // information while the task is being killed (consider a
+    // task that takes 30 minutes to be cleanly killed).
+    if (healthPid != -1) {
+      os::killtree(healthPid, SIGKILL);
     }
   }
 
@@ -538,7 +570,6 @@ protected:
 private:
   void reaped(
       ExecutorDriver* driver,
-      const TaskID& taskId,
       pid_t pid,
       const Future<Option<int> >& status_)
   {
@@ -574,8 +605,10 @@ private:
 
     cout << message << " (pid: " << pid << ")" << endl;
 
+    CHECK_SOME(taskId);
+
     TaskStatus taskStatus;
-    taskStatus.mutable_task_id()->MergeFrom(taskId);
+    taskStatus.mutable_task_id()->MergeFrom(taskId.get());
     taskStatus.set_state(taskState);
     taskStatus.set_message(message);
     if (killed && killedByHealthCheck) {
@@ -621,40 +654,41 @@ private:
 
   void launchHealthCheck(const TaskInfo& task)
   {
-    if (task.has_health_check()) {
-      JSON::Object json = JSON::protobuf(task.health_check());
+    CHECK(task.has_health_check());
 
-      // Launch the subprocess using 'exec' style so that quotes can
-      // be properly handled.
-      vector<string> argv(4);
-      argv[0] = "mesos-health-check";
-      argv[1] = "--executor=" + stringify(self());
-      argv[2] = "--health_check_json=" + stringify(json);
-      argv[3] = "--task_id=" + task.task_id().value();
+    JSON::Object json = JSON::protobuf(task.health_check());
 
-      cout << "Launching health check process: "
-           << path::join(healthCheckDir, "mesos-health-check")
-           << " " << argv[1] << " " << argv[2] << " " << argv[3] << endl;
+    // Launch the subprocess using 'exec' style so that quotes can
+    // be properly handled.
+    vector<string> argv(4);
+    argv[0] = "mesos-health-check";
+    argv[1] = "--executor=" + stringify(self());
+    argv[2] = "--health_check_json=" + stringify(json);
+    argv[3] = "--task_id=" + task.task_id().value();
 
-      Try<Subprocess> healthProcess =
-        process::subprocess(
-          path::join(healthCheckDir, "mesos-health-check"),
-          argv,
-          // Intentionally not sending STDIN to avoid health check
-          // commands that expect STDIN input to block.
-          Subprocess::PATH("/dev/null"),
-          Subprocess::FD(STDOUT_FILENO),
-          Subprocess::FD(STDERR_FILENO));
+    cout << "Launching health check process: "
+         << path::join(healthCheckDir, "mesos-health-check")
+         << " " << argv[1] << " " << argv[2] << " " << argv[3] << endl;
 
-      if (healthProcess.isError()) {
-        cerr << "Unable to launch health process: " << healthProcess.error();
-      } else {
-        healthPid = healthProcess.get().pid();
+    Try<Subprocess> healthProcess =
+      process::subprocess(
+        path::join(healthCheckDir, "mesos-health-check"),
+        argv,
+        // Intentionally not sending STDIN to avoid health check
+        // commands that expect STDIN input to block.
+        Subprocess::PATH("/dev/null"),
+        Subprocess::FD(STDOUT_FILENO),
+        Subprocess::FD(STDERR_FILENO));
 
-        cout << "Health check process launched at pid: "
-             << stringify(healthPid) << endl;
-      }
+    if (healthProcess.isError()) {
+      cerr << "Unable to launch health process: " << healthProcess.error();
+      return;
     }
+
+    healthPid = healthProcess.get().pid();
+
+    cout << "Health check process launched at pid: "
+         << stringify(healthPid) << endl;
   }
 
   enum State
@@ -671,6 +705,8 @@ private:
   Duration escalationTimeout;
   Timer escalationTimer;
   Option<ExecutorDriver*> driver;
+  Option<FrameworkInfo> frameworkInfo;
+  Option<TaskID> taskId;
   string healthCheckDir;
   Option<char**> override;
   Option<string> sandboxDirectory;
@@ -691,12 +727,13 @@ public:
       const Option<string>& user,
       const Option<string>& taskCommand)
   {
-    process = new CommandExecutorProcess(override,
-                                         healthCheckDir,
-                                         sandboxDirectory,
-                                         workingDirectory,
-                                         user,
-                                         taskCommand);
+    process = new CommandExecutorProcess(
+        override,
+        healthCheckDir,
+        sandboxDirectory,
+        workingDirectory,
+        user,
+        taskCommand);
 
     spawn(process);
   }

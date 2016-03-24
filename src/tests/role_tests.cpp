@@ -20,8 +20,10 @@
 #include <mesos/http.hpp>
 #include <mesos/roles.hpp>
 
+#include <process/owned.hpp>
 #include <process/pid.hpp>
 
+#include "tests/containerizer.hpp"
 #include "tests/mesos.hpp"
 
 using mesos::internal::master::Master;
@@ -33,10 +35,12 @@ using std::vector;
 using google::protobuf::RepeatedPtrField;
 
 using process::Future;
+using process::Owned;
 using process::PID;
 
 using process::http::OK;
 using process::http::Response;
+using process::http::Unauthorized;
 
 using testing::AtMost;
 
@@ -57,12 +61,12 @@ TEST_F(RoleTest, BadRegister)
   master::Flags masterFlags = CreateMasterFlags();
   masterFlags.roles = "foo,bar";
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Future<Nothing> error;
   EXPECT_CALL(sched, error(&driver, _))
@@ -75,8 +79,6 @@ TEST_F(RoleTest, BadRegister)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -88,13 +90,14 @@ TEST_F(RoleTest, ImplicitRoleRegister)
   master::Flags masterFlags = CreateMasterFlags();
   masterFlags.allocation_interval = Milliseconds(50);
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:1;mem:512;disk:1024";
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   FrameworkInfo frameworkInfo = DEFAULT_FRAMEWORK_INFO;
@@ -102,7 +105,7 @@ TEST_F(RoleTest, ImplicitRoleRegister)
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   // We use the filter explicitly here so that the resources will not
   // be filtered for 5 seconds (the default).
@@ -174,8 +177,6 @@ TEST_F(RoleTest, ImplicitRoleRegister)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -186,15 +187,19 @@ TEST_F(RoleTest, ImplicitRoleStaticReservation)
   master::Flags masterFlags = CreateMasterFlags();
   masterFlags.allocation_interval = Milliseconds(50);
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   MockExecutor exec(DEFAULT_EXECUTOR_ID);
+  TestContainerizer containerizer(&exec);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus(role):1;mem(role):512";
 
-  Try<PID<Slave>> slave = StartSlave(&exec, slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+
+  Try<Owned<cluster::Slave>> slave =
+    StartSlave(detector.get(), &containerizer, slaveFlags);
   ASSERT_SOME(slave);
 
   FrameworkInfo frameworkInfo = DEFAULT_FRAMEWORK_INFO;
@@ -202,7 +207,7 @@ TEST_F(RoleTest, ImplicitRoleStaticReservation)
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   // We use the filter explicitly here so that the resources will not
   // be filtered for 5 seconds (the default).
@@ -250,8 +255,6 @@ TEST_F(RoleTest, ImplicitRoleStaticReservation)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -259,10 +262,14 @@ TEST_F(RoleTest, ImplicitRoleStaticReservation)
 // information when there are no active roles.
 TEST_F(RoleTest, EndpointEmpty)
 {
-  Try<PID<Master>> master = StartMaster();
+  Try<Owned<cluster::Master>> master = StartMaster();
   ASSERT_SOME(master);
 
-  Future<Response> response = process::http::get(master.get(), "roles");
+  Future<Response> response = process::http::get(
+      master.get()->pid,
+      "roles",
+      None(),
+      createBasicAuthHeaders(DEFAULT_CREDENTIAL));
 
   AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response)
     << response.get().body;
@@ -290,8 +297,6 @@ TEST_F(RoleTest, EndpointEmpty)
 
   ASSERT_SOME(expected);
   EXPECT_EQ(expected.get(), parse.get());
-
-  Shutdown();
 }
 
 
@@ -304,10 +309,14 @@ TEST_F(RoleTest, EndpointNoFrameworks)
   masterFlags.roles = "role1,role2";
   masterFlags.weights = "role1=5";
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
-  Future<Response> response = process::http::get(master.get(), "roles");
+  Future<Response> response = process::http::get(
+      master.get()->pid,
+      "roles",
+      None(),
+      createBasicAuthHeaders(DEFAULT_CREDENTIAL));
 
   AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response)
     << response.get().body;
@@ -355,8 +364,6 @@ TEST_F(RoleTest, EndpointNoFrameworks)
 
   ASSERT_SOME(expected);
   EXPECT_EQ(expected.get(), parse.get());
-
-  Shutdown();
 }
 
 
@@ -368,7 +375,7 @@ TEST_F(RoleTest, EndpointImplicitRolesWeights)
   master::Flags masterFlags = CreateMasterFlags();
   masterFlags.weights = "roleX=5,roleY=4";
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   FrameworkInfo frameworkInfo1 = DEFAULT_FRAMEWORK_INFO;
@@ -376,7 +383,7 @@ TEST_F(RoleTest, EndpointImplicitRolesWeights)
 
   MockScheduler sched1;
   MesosSchedulerDriver driver1(
-      &sched1, frameworkInfo1, master.get(), DEFAULT_CREDENTIAL);
+      &sched1, frameworkInfo1, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Future<FrameworkID> frameworkId1;
   EXPECT_CALL(sched1, registered(&driver1, _, _))
@@ -389,7 +396,7 @@ TEST_F(RoleTest, EndpointImplicitRolesWeights)
 
   MockScheduler sched2;
   MesosSchedulerDriver driver2(
-      &sched2, frameworkInfo2, master.get(), DEFAULT_CREDENTIAL);
+      &sched2, frameworkInfo2, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Future<FrameworkID> frameworkId2;
   EXPECT_CALL(sched2, registered(&driver2, _, _))
@@ -400,7 +407,11 @@ TEST_F(RoleTest, EndpointImplicitRolesWeights)
   AWAIT_READY(frameworkId1);
   AWAIT_READY(frameworkId2);
 
-  Future<Response> response = process::http::get(master.get(), "roles");
+  Future<Response> response = process::http::get(
+      master.get()->pid,
+      "roles",
+      None(),
+      createBasicAuthHeaders(DEFAULT_CREDENTIAL));
 
   AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, response)
     << response.get().body;
@@ -464,8 +475,6 @@ TEST_F(RoleTest, EndpointImplicitRolesWeights)
 
   driver2.stop();
   driver2.join();
-
-  Shutdown();
 }
 
 
@@ -474,7 +483,7 @@ TEST_F(RoleTest, EndpointImplicitRolesWeights)
 // no registered frameworks.
 TEST_F(RoleTest, EndpointImplicitRolesQuotas)
 {
-  Try<PID<Master>> master = StartMaster();
+  Try<Owned<cluster::Master>> master = StartMaster();
   ASSERT_SOME(master);
 
   Resources quotaResources = Resources::parse("cpus:1;mem:512").get();
@@ -490,7 +499,7 @@ TEST_F(RoleTest, EndpointImplicitRolesQuotas)
       JSON::protobuf(jsonQuotaResources)).get();
 
   Future<Response> quotaResponse = process::http::post(
-      master.get(),
+      master.get()->pid,
       "quota",
       createBasicAuthHeaders(DEFAULT_CREDENTIAL),
       quotaRequestBody);
@@ -498,7 +507,11 @@ TEST_F(RoleTest, EndpointImplicitRolesQuotas)
   AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, quotaResponse)
     << quotaResponse.get().body;
 
-  Future<Response> rolesResponse = process::http::get(master.get(), "roles");
+  Future<Response> rolesResponse = process::http::get(
+      master.get()->pid,
+      "roles",
+      None(),
+      createBasicAuthHeaders(DEFAULT_CREDENTIAL));
 
   AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, rolesResponse)
     << rolesResponse.get().body;
@@ -541,14 +554,18 @@ TEST_F(RoleTest, EndpointImplicitRolesQuotas)
   // Remove the quota, and check that the role no longer appears in
   // the "/roles" endpoint.
   Future<Response> deleteResponse = process::http::requestDelete(
-      master.get(),
+      master.get()->pid,
       "quota/non-existent-role",
       createBasicAuthHeaders(DEFAULT_CREDENTIAL));
 
   AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, deleteResponse)
     << deleteResponse.get().body;
 
-  rolesResponse = process::http::get(master.get(), "roles");
+  rolesResponse = process::http::get(
+      master.get()->pid,
+      "roles",
+      None(),
+      createBasicAuthHeaders(DEFAULT_CREDENTIAL));
 
   AWAIT_EXPECT_RESPONSE_STATUS_EQ(OK().status, rolesResponse)
     << rolesResponse.get().body;
@@ -577,8 +594,6 @@ TEST_F(RoleTest, EndpointImplicitRolesQuotas)
 
   ASSERT_SOME(expected);
   EXPECT_EQ(expected.get(), parse.get());
-
-  Shutdown();
 }
 
 
@@ -629,6 +644,37 @@ TEST(RolesTest, Validate)
   EXPECT_NONE(roles::validate({"foo", "bar", "*"}));
 
   EXPECT_SOME(roles::validate({"foo", ".", "*"}));
+}
+
+
+// Testing get without authentication and with bad credentials.
+TEST_F(RoleTest, EndpointBadAuthentication)
+{
+  // Set up a master with authentication required.
+  // Note that the default master test flags enable HTTP authentication.
+  Try<Owned<cluster::Master>> master = StartMaster();
+  ASSERT_SOME(master);
+
+  // Get request without authentication.
+  Future<Response> response = process::http::get(
+      master.get()->pid,
+      "roles");
+
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(Unauthorized({}).status, response);
+
+  // Bad credentials which should fail authentication.
+  Credential badCredential;
+  badCredential.set_principal("badPrincipal");
+  badCredential.set_secret("badSecret");
+
+  // Get request with bad authentication.
+  response = process::http::get(
+    master.get()->pid,
+    "roles",
+    None(),
+    createBasicAuthHeaders(badCredential));
+
+  AWAIT_EXPECT_RESPONSE_STATUS_EQ(Unauthorized({}).status, response);
 }
 
 }  // namespace tests {

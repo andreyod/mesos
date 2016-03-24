@@ -49,10 +49,10 @@ public:
 
   Option<std::string> image_providers;
   std::string image_provisioner_backend;
+
+  std::string appc_simple_discovery_uri_prefix;
   std::string appc_store_dir;
 
-  std::string docker_auth_server;
-  std::string docker_puller_timeout_secs;
   std::string docker_registry;
   std::string docker_store_dir;
 
@@ -88,6 +88,7 @@ public:
   bool cgroups_limit_swap;
   bool cgroups_cpu_enable_pids_and_tids_count;
   Option<std::string> cgroups_net_cls_primary_handle;
+  Option<std::string> cgroups_net_cls_secondary_handles;
   Option<std::string> slave_subsystems;
   Option<std::string> perf_events;
   Duration perf_interval;
@@ -118,11 +119,17 @@ public:
   std::string egress_flow_classifier_parent;
   bool network_enable_socket_statistics_summary;
   bool network_enable_socket_statistics_details;
+  bool network_enable_snmp_statistics;
 #endif
+  Option<std::string> network_cni_plugins_dir;
+  Option<std::string> network_cni_config_dir;
   Duration container_disk_watch_interval;
   bool enforce_container_disk_quota;
   Option<Modules> modules;
   std::string authenticatee;
+  std::string http_authenticators;
+  bool authenticate_http;
+  Option<Path> http_credentials;
   Option<std::string> hooks;
   Option<std::string> resource_estimator;
   Option<std::string> qos_controller;

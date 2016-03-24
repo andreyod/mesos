@@ -652,21 +652,11 @@ namespace operation {
 
 Option<Error> validate(
     const Offer::Operation::Reserve& reserve,
-    const Option<string>& role,
     const Option<string>& principal)
 {
   Option<Error> error = resource::validate(reserve.resources());
   if (error.isSome()) {
     return Error("Invalid resources: " + error.get().message);
-  }
-
-  // TODO(greggomann): Remove this check once dynamic reservation is
-  // allowed without a principal in 0.28.
-  if (principal.isNone()) {
-    return Error(
-        "Currently must have a principal associated with the request in order "
-        "to reserve resources. This will change in a future version. Note "
-        "that this is distinct from the principal contained in the resources");
   }
 
   foreach (const Resource& resource, reserve.resources()) {
@@ -675,26 +665,26 @@ Option<Error> validate(
           "Resource " + stringify(resource) + " is not dynamically reserved");
     }
 
-    // TODO(greggomann): Remove this check once dynamic reservation is
-    // allowed without a principal in 0.28.
-    if (!resource.reservation().has_principal()) {
-      return Error(
-          "Reserved resources currently must contain a principal. "
-          "This will change in a future version");
-    }
+    if (principal.isSome()) {
+      if (!resource.reservation().has_principal()) {
+        return Error(
+            "A reserve operation was attempted by principal '" +
+            principal.get() + "', but there is a reserved resource in the "
+            "request with no principal set in `ReservationInfo`");
+      }
 
-    if (role.isSome() && resource.role() != role.get()) {
+      if (resource.reservation().principal() != principal.get()) {
+        return Error(
+            "A reserve operation was attempted by principal '" +
+            principal.get() + "', but there is a reserved resource in the "
+            "request with principal '" + resource.reservation().principal() +
+            "' set in `ReservationInfo`");
+      }
+    } else if (resource.reservation().has_principal()) {
       return Error(
-          "The reserved resource's role '" + resource.role() +
-          "' does not match the framework's role '" + role.get() + "'");
-    }
-
-    if (resource.reservation().principal() != principal.get()) {
-      return Error(
-          "The reserved resource's principal '" +
-          resource.reservation().principal() +
-          "' does not match the principal '" +
-          principal.get() + "'");
+          "A reserve operation was attempted with no principal, but there is a "
+          "reserved resource in the request with principal '" +
+          resource.reservation().principal() + "' set in `ReservationInfo`");
     }
 
     // NOTE: This check would be covered by 'contains' since there
@@ -711,19 +701,11 @@ Option<Error> validate(
 }
 
 
-Option<Error> validate(
-    const Offer::Operation::Unreserve& unreserve,
-    bool hasPrincipal)
+Option<Error> validate(const Offer::Operation::Unreserve& unreserve)
 {
   Option<Error> error = resource::validate(unreserve.resources());
   if (error.isSome()) {
     return Error("Invalid resources: " + error.get().message);
-  }
-
-  if (!hasPrincipal) {
-    return Error(
-        "Currently cannot unreserve resources without a principal. "
-        "This will change in a future version");
   }
 
   // NOTE: We don't check that 'FrameworkInfo.principal' matches

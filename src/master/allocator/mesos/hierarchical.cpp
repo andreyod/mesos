@@ -883,9 +883,7 @@ void HierarchicalAllocatorProcess::recoverResources(
   // which it might not in the event that we dispatched Master::offer
   // before we received Allocator::removeSlave).
   if (slaves.contains(slaveId)) {
-    // NOTE: We cannot add the following CHECK due to the double
-    // precision errors. See MESOS-1187 for details.
-    // CHECK(slaves[slaveId].allocated.contains(resources));
+    CHECK(slaves[slaveId].allocated.contains(resources));
 
     slaves[slaveId].allocated -= resources;
 
@@ -1020,6 +1018,8 @@ void HierarchicalAllocatorProcess::setQuota(
     }
   }
 
+  metrics.setQuota(role, quota);
+
   // TODO(alexr): Print all quota info for the role.
   LOG(INFO) << "Set quota " << quota.info.guarantee() << " for role '" << role
             << "'";
@@ -1047,9 +1047,47 @@ void HierarchicalAllocatorProcess::removeQuota(
   quotas.erase(role);
   quotaRoleSorter->remove(role);
 
+  metrics.removeQuota(role);
+
   // Trigger the allocation explicitly in order to promptly react to the
   // operator's request.
   allocate();
+}
+
+
+void HierarchicalAllocatorProcess::updateWeights(
+    const vector<WeightInfo>& weightInfos)
+{
+  CHECK(initialized);
+
+  bool rebalance = false;
+
+  // Update the weight for each specified role.
+  foreach (const WeightInfo& weightInfo, weightInfos) {
+    CHECK(weightInfo.has_role());
+    weights[weightInfo.role()] = weightInfo.weight();
+
+    // The allocator only needs to rebalance if there is a framework
+    // registered with this role. The roleSorter contains only roles
+    // for registered frameworks, but quotaRoleSorter contains any role
+    // with quota set, regardless of whether any frameworks are registered
+    // with that role.
+    if (quotas.contains(weightInfo.role())) {
+      quotaRoleSorter->update(weightInfo.role(), weightInfo.weight());
+    }
+
+    if (roleSorter->contains(weightInfo.role())) {
+      rebalance = true;
+      roleSorter->update(weightInfo.role(), weightInfo.weight());
+    }
+  }
+
+  // If at least one of the updated roles has registered frameworks,
+  // then trigger the allocation explicitly in order to promptly
+  // react to the operator's request.
+  if (rebalance) {
+    allocate();
+  }
 }
 
 
@@ -1091,7 +1129,11 @@ void HierarchicalAllocatorProcess::allocate()
   Stopwatch stopwatch;
   stopwatch.start();
 
+  metrics.allocation_run.start();
+
   allocate(slaves.keys());
+
+  metrics.allocation_run.stop();
 
   VLOG(1) << "Performed allocation for " << slaves.size() << " slaves in "
             << stopwatch.elapsed();
@@ -1109,9 +1151,12 @@ void HierarchicalAllocatorProcess::allocate(
 
   Stopwatch stopwatch;
   stopwatch.start();
+  metrics.allocation_run.start();
 
   hashset<SlaveID> slaves({slaveId});
   allocate(slaves);
+
+  metrics.allocation_run.stop();
 
   VLOG(1) << "Performed allocation for slave " << slaveId << " in "
           << stopwatch.elapsed();
@@ -1122,6 +1167,8 @@ void HierarchicalAllocatorProcess::allocate(
 void HierarchicalAllocatorProcess::allocate(
     const hashset<SlaveID>& slaveIds_)
 {
+  ++metrics.allocation_runs;
+
   // Compute the offerable resources, per framework:
   //   (1) For reserved resources on the slave, allocate these to a
   //       framework having the corresponding role.
@@ -1149,7 +1196,7 @@ void HierarchicalAllocatorProcess::allocate(
   // TODO(vinod): Implement a smarter sorting algorithm.
   std::random_shuffle(slaveIds.begin(), slaveIds.end());
 
-  // Returns the __amount__ of resources allocated to a quota role. Since we
+  // Returns the __quantity__ of resources allocated to a quota role. Since we
   // account for reservations and persistent volumes toward quota, we strip
   // reservation and persistent volume related information for comparability.
   // The result is used to determine whether a role's quota is satisfied, and
@@ -1160,13 +1207,16 @@ void HierarchicalAllocatorProcess::allocate(
   auto getQuotaRoleAllocatedResources = [this](const string& role) {
     CHECK(quotas.contains(role));
 
-    // Strip the reservation and persistent volume info.
+    // NOTE: `allocationScalarQuantities` omits dynamic reservation and
+    // persistent volume info, but we additionally strip `role` here.
     Resources resources;
 
-    foreach (Resource resource, quotaRoleSorter->allocationScalars(role)) {
+    foreach (Resource resource,
+             quotaRoleSorter->allocationScalarQuantities(role)) {
+      CHECK(!resource.has_reservation());
+      CHECK(!resource.has_disk());
+
       resource.set_role("*");
-      resource.clear_reservation();
-      resource.clear_disk();
       resources += resource;
     }
 
@@ -1186,7 +1236,8 @@ void HierarchicalAllocatorProcess::allocate(
         continue;
       }
 
-      // Get the total amount of resources allocated to a quota role.
+      // Get the total quantity of resources allocated to a quota role. The
+      // value omits role, reservation, and persistence info.
       Resources roleConsumedResources = getQuotaRoleAllocatedResources(role);
 
       // If quota for the role is satisfied, we do not need to do any further
@@ -1265,17 +1316,21 @@ void HierarchicalAllocatorProcess::allocate(
     }
   }
 
-  // Calculate how many scalar resources (including revocable and reserved)
-  // are available for allocation in the next round. We need this in order
-  // to ensure we do not over-allocate resources during the second stage.
+  // Calculate the total quantity of scalar resources (including revocable
+  // and reserved) that are available for allocation in the next round. We
+  // need this in order to ensure we do not over-allocate resources during
+  // the second stage.
+  //
+  // For performance reasons (MESOS-4833), this omits information about
+  // dynamic reservations or persistent volumes in the resources.
   //
   // NOTE: We use total cluster resources, and not just those based on the
   // agents participating in the current allocation (i.e. provided as an
   // argument to the `allocate()` call) so that frameworks in roles without
   // quota are not unnecessarily deprived of resources.
-  Resources remainingClusterResources = roleSorter->totalScalars();
+  Resources remainingClusterResources = roleSorter->totalScalarQuantities();
   foreachkey (const string& role, activeRoles) {
-    remainingClusterResources -= roleSorter->allocationScalars(role);
+    remainingClusterResources -= roleSorter->allocationScalarQuantities(role);
   }
 
   // Frameworks in a quota'ed role may temporarily reject resources by
@@ -1305,6 +1360,12 @@ void HierarchicalAllocatorProcess::allocate(
   //     than available, i.e. `remainingClusterResources` does not contain
   //     (`allocatedStage2` + potential offer). In this case we skip this
   //     agent and continue to the next one.
+  //
+  // NOTE: Like `remainingClusterResources`, `allocatedStage2` omits
+  // information about dynamic reservations and persistent volumes for
+  // performance reasons. This invariant is preserved because we only add
+  // resources to it that have also had this metadata stripped from them
+  // (typically by using `Resources::createStrippedScalarQuantity`).
   Resources allocatedStage2;
 
   // At this point resources for quotas are allocated or accounted for.
@@ -1368,9 +1429,11 @@ void HierarchicalAllocatorProcess::allocate(
         // stage to use more than `remainingClusterResources`, move along.
         // We do not terminate early, as offers generated further in the
         // loop may be small enough to fit within `remainingClusterResources`.
-        const Resources scalarResources = resources.scalars();
+        const Resources scalarQuantity =
+          resources.createStrippedScalarQuantity();
+
         if (!remainingClusterResources.contains(
-                allocatedStage2 + scalarResources)) {
+                allocatedStage2 + scalarQuantity)) {
           continue;
         }
 
@@ -1383,7 +1446,7 @@ void HierarchicalAllocatorProcess::allocate(
         // NOTE: We may have already allocated some resources on the current
         // agent as part of quota.
         offerable[frameworkId][slaveId] += resources;
-        allocatedStage2 += scalarResources;
+        allocatedStage2 += scalarQuantity;
         slaves[slaveId].allocated += resources;
 
         frameworkSorters[role]->add(slaveId, resources);
@@ -1631,6 +1694,47 @@ bool HierarchicalAllocatorProcess::allocatable(
 
   return (cpus.isSome() && cpus.get() >= MIN_CPUS) ||
          (mem.isSome() && mem.get() >= MIN_MEM);
+}
+
+
+double HierarchicalAllocatorProcess::_resources_offered_or_allocated(
+    const string& resource)
+{
+  double offered_or_allocated = 0;
+
+  foreachvalue (const Slave& slave, slaves) {
+    Option<Value::Scalar> value =
+      slave.allocated.get<Value::Scalar>(resource);
+
+    if (value.isSome()) {
+      offered_or_allocated += value->value();
+    }
+  }
+
+  return offered_or_allocated;
+}
+
+
+double HierarchicalAllocatorProcess::_resources_total(
+    const string& resource)
+{
+  Option<Value::Scalar> total =
+    roleSorter->totalScalarQuantities()
+      .get<Value::Scalar>(resource);
+
+  return total.isSome() ? total->value() : 0;
+}
+
+
+double HierarchicalAllocatorProcess::_quota_allocated(
+    const string& role,
+    const string& resource)
+{
+  Option<Value::Scalar> used =
+    quotaRoleSorter->allocationScalarQuantities(role)
+      .get<Value::Scalar>(resource);
+
+  return used.isSome() ? used->value() : 0;
 }
 
 } // namespace internal {

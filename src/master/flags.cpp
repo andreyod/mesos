@@ -22,6 +22,7 @@
 #include "master/constants.hpp"
 #include "master/flags.hpp"
 
+using std::string;
 
 mesos::internal::master::Flags::Flags()
 {
@@ -191,9 +192,11 @@ mesos::internal::master::Flags::Flags()
 
   add(&Flags::weights,
       "weights",
-      "A comma-separated list of role/weight pairs\n"
-      "of the form `role=weight,role=weight`. Weights\n"
-      "are used to indicate forms of priority.");
+      "A comma-separated list of role/weight pairs of the form\n"
+      "`role=weight,role=weight`. Weights can be used to control the\n"
+      "relative share of cluster resources that is offered to different\n"
+      "roles. This flag is deprecated. Instead, operators should configure\n"
+      "weights dynamically using the `/weights` HTTP endpoint.");
 
   // TODO(adam-mesos): Deprecate --authenticate for --authenticate_frameworks.
   // See MESOS-4386 for details.
@@ -212,8 +215,8 @@ mesos::internal::master::Flags::Flags()
   add(&Flags::authenticate_http,
       "authenticate_http",
       "If `true`, only authenticated requests for HTTP endpoints supporting\n"
-      "authentication are allowed.\n"
-      "If `false`, unauthenticated HTTP endpoint requests are also allowed.\n",
+      "authentication are allowed. If `false`, unauthenticated requests to\n"
+      "HTTP endpoints are also allowed.\n",
       false);
 
   add(&Flags::credentials,
@@ -222,7 +225,7 @@ mesos::internal::master::Flags::Flags()
       "each line containing `principal` and `secret` separated by "
       "whitespace,\n"
       "or, a path to a JSON-formatted file containing credentials.\n"
-      "Path could be of the form `file:///path/to/file` or `/path/to/file`."
+      "Path can be of the form `file:///path/to/file` or `/path/to/file`."
       "\n"
       "JSON file Example:\n"
       "{\n"
@@ -244,8 +247,8 @@ mesos::internal::master::Flags::Flags()
       "or `/path/to/file`.\n"
       "\n"
       "Note that if the flag `--authorizers` is provided with a value\n"
-      "different than `" + DEFAULT_AUTHORIZER + "`, the ACLs contents will be\n"
-      "ignored.\n"
+      "different than `" + string(DEFAULT_AUTHORIZER) + "`, the ACLs contents\n"
+      "will be ignored.\n"
       "\n"
       "See the ACLs protobuf in authorizer.proto for the expected format.\n"
       "\n"
@@ -297,7 +300,7 @@ mesos::internal::master::Flags::Flags()
       "  \"disabled_endpoints\" : {\n"
       "    \"paths\" : [\n"
       "      \"/files/browse\",\n"
-      "      \"/slave(0)/stats.json\"\n"
+      "      \"/metrics/snapshot\"\n"
       "    ]\n"
       "  }\n"
       "}");
@@ -341,7 +344,8 @@ mesos::internal::master::Flags::Flags()
       "offer_timeout",
       "Duration of time before an offer is rescinded from a framework.\n"
       "This helps fairness when running frameworks that hold on to offers,\n"
-      "or frameworks that accidentally drop offers.");
+      "or frameworks that accidentally drop offers.\n"
+      "If not set, offers do not timeout.");
 
   // This help message for --modules flag is the same for
   // {master,slave,tests}/flags.hpp and should always be kept in
@@ -393,14 +397,14 @@ mesos::internal::master::Flags::Flags()
   add(&Flags::authenticators,
       "authenticators",
       "Authenticator implementation to use when authenticating frameworks\n"
-      "and/or slaves. Use the default `" + DEFAULT_AUTHENTICATOR + "`, or\n"
-      "load an alternate authenticator module using `--modules`.",
+      "and/or slaves. Use the default `" + string(DEFAULT_AUTHENTICATOR) + "`\n"
+      "or load an alternate authenticator module using `--modules`.",
       DEFAULT_AUTHENTICATOR);
 
   add(&Flags::allocator,
       "allocator",
       "Allocator to use for resource allocation to frameworks.\n"
-      "Use the default `" + DEFAULT_ALLOCATOR + "` allocator, or\n"
+      "Use the default `" + string(DEFAULT_ALLOCATOR) + "` allocator, or\n"
       "load an alternate allocator module using `--modules`.",
       DEFAULT_ALLOCATOR);
 
@@ -444,12 +448,12 @@ mesos::internal::master::Flags::Flags()
       "authorizers",
       "Authorizer implementation to use when authorizing actions that\n"
       "require it.\n"
-      "Use the default `" + DEFAULT_AUTHORIZER + "`, or\n"
+      "Use the default `" + string(DEFAULT_AUTHORIZER) + "`, or\n"
       "load an alternate authorizer module using `--modules`.\n"
       "\n"
       "Note that if the flag `--authorizers` is provided with a value\n"
-      "different than the default `" + DEFAULT_AUTHORIZER + "`, the ACLs\n"
-      "passed through the `--acls` flag will be ignored.\n"
+      "different than the default `" + string(DEFAULT_AUTHORIZER) + "`, the\n"
+      "ACLs passed through the `--acls` flag will be ignored.\n"
       "\n"
       "Currently there's no support for multiple authorizers.",
       DEFAULT_AUTHORIZER);
@@ -458,8 +462,8 @@ mesos::internal::master::Flags::Flags()
       "http_authenticators",
       "HTTP authenticator implementation to use when handling requests to\n"
       "authenticated endpoints. Use the default\n"
-      "`" + DEFAULT_HTTP_AUTHENTICATOR + "`, or load an alternate HTTP\n"
-      "authenticator module using `--modules`.\n"
+      "`" + string(DEFAULT_HTTP_AUTHENTICATOR) + "`, or load an alternate\n"
+      "HTTP authenticator module using `--modules`.\n"
       "\n"
       "Currently there is no support for multiple HTTP authenticators.",
       DEFAULT_HTTP_AUTHENTICATOR);

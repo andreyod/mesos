@@ -1,4 +1,5 @@
 ---
+title: Apache Mesos - Authorization
 layout: documentation
 ---
 
@@ -12,11 +13,12 @@ Authorization currently allows
  4. Authorized _principals_ to set and remove quotas through the "/quota" HTTP endpoint.
  5. Authorized _principals_ to reserve and unreserve resources through the "/reserve" and "/unreserve" HTTP endpoints, as well as with the `RESERVE` and `UNRESERVE` offer operations.
  6. Authorized _principals_ to create and destroy persistent volumes through the "/create-volumes" and "/destroy-volumes" HTTP endpoints, as well as with the `CREATE` and `DESTROY` offer operations.
+ 7. Authorized _principals_ to update weights through the "/weights" HTTP endpoint.
 
 
 ## ACLs
 
-Authorization is implemented via Access Control Lists (ACLs). For each of the above cases, ACLs can be used to restrict access. Operators can setup ACLs in JSON format. See [authorizer.proto](https://github.com/apache/mesos/blob/master/include/mesos/authorizer/authorizer.proto) for details.
+Authorization is implemented via Access Control Lists (ACLs). For each of the above cases, ACLs can be used to restrict access. Operators can setup ACLs in JSON format when starting the master (see [Configuring Authorization](#aclsConfiguration) for details).
 
 Each ACL specifies a set of `Subjects` that can perform an `Action` on a set of `Objects`.
 
@@ -31,23 +33,22 @@ The currently supported `Actions` are:
 7. "unreserve_resources": Unreserve resources
 8. "create_volumes": Create persistent volumes
 9. "destroy_volumes": Destroy persistent volumes
+10. "update_weights": Update weights
 
 The currently supported `Subjects` are:
 
 1. "principals"
 	- Framework principals (used by "register_frameworks", "run_tasks", "reserve", "unreserve", "create_volumes", and "destroy_volumes" actions)
-	- Usernames (used by "teardown_frameworks", "set_quotas", "remove_quotas", "reserve", "unreserve", "create_volumes", and "destroy_volumes" actions)
+	- Operator usernames (used by "teardown_frameworks", "set_quotas", "remove_quotas", "reserve", "unreserve", "create_volumes", "destroy_volumes", and "update_weights" actions)
 
 The currently supported `Objects` are:
 
-1. "roles": Resource [roles](roles.md) that framework can register with (used by "register_frameworks" and "set_quotas" actions)
-2. "users": Unix user to launch the task/executor as (used by "run_tasks" actions)
+1. "roles": Resource [roles](roles.md) that frameworks can register with, [reserve resources](reservation.md) for, or create [persistent volumes](persistent-volume.md) for (used by "register_frameworks", "set_quotas", "reserve_resources", and "create_volumes" actions).
+2. "users": Unix user to launch the task/executor as (used by "run_tasks" actions).
 3. "framework_principals": Framework principals that can be torn down by HTTP POST (used by "teardown_frameworks" actions).
-4. "resources": Resources that can be reserved. Currently the only types considered by the default authorizer are `ANY` and `NONE` (used by "reserves" action).
-5. "reserver_principals": Framework principals whose reserved resources can be unreserved (used by "unreserves" action).
-6. "volume_types": Types of volumes that can be created by a given principal. Currently the only types considered by the default authorizer are `ANY` and `NONE` (used by "create_volumes" action).
-7. "creator_principals": Principals whose persistent volumes can be destroyed (used by "destroy_volumes" action).
-8. "quota_principals": Principals that set the quota to be removed (used by "remove_quotas" action)
+4. "reserver_principals": Framework principals whose reserved resources can be unreserved (used by "unreserves" action).
+5. "creator_principals": Principals whose persistent volumes can be destroyed (used by "destroy_volumes" action).
+6. "quota_principals": Principals that set the quota to be removed (used by "remove_quotas" action).
 
 > NOTE: Both `Subjects` and `Objects` can be either an array of strings or one of the special values `ANY` or `NONE`.
 
@@ -58,7 +59,7 @@ The Mesos master checks the ACLs to verify whether a request is authorized or no
 
 For example, when a framework (re-)registers with the master, "register_frameworks" ACLs are checked to see if the framework (`FrameworkInfo.principal`) is authorized to receive offers for the given resource role (`FrameworkInfo.role`). If not authorized, the framework is not allowed to (re-)register and gets an `Error` message back (which aborts the scheduler driver).
 
-Similarly, when a framework launches a task, "run_tasks" ACLs are checked to see if the framework (`FrameworkInfo.principal`) is authorized to run the task/executor as the given user. If not authorized, the launch is rejected and the framework gets a TASK_LOST.
+Similarly, when a framework launches a task, "run_tasks" ACLs are checked to see if the framework (`FrameworkInfo.principal`) is authorized to run the task/executor as the given user. If not authorized, the launch is rejected and the framework gets a `TASK_LOST`.
 
 In the same vein, when a user/principal attempts to teardown a framework using the "/teardown" HTTP endpoint on the master, "teardown_frameworks" ACLs are checked to see if the principal is authorized to teardown the given framework. If not authorized, the teardown is rejected and the user receives a `Forbidden` HTTP response.
 
@@ -214,7 +215,7 @@ In a real-world organization, principals and roles might be used to represent va
                                  ]
         }
 
-9. The principal `foo` can reserve any resources, and no other principal can reserve resources.
+9. The principal `foo` can reserve resources for any role, and no other principal can reserve resources.
 
         {
           "permissive": false,
@@ -223,14 +224,14 @@ In a real-world organization, principals and roles might be used to represent va
                                    "principals": {
                                      "values": ["foo"]
                                    },
-                                   "resources": {
+                                   "roles": {
                                      "type": "ANY"
                                    }
                                  }
                                ]
         }
 
-10. The principal `foo` cannot reserve any resources, and any other principal (or framework without a principal) can reserve resources.
+10. The principal `foo` cannot reserve resources, and any other principal (or framework without a principal) can reserve resources for any role.
 
         {
           "reserve_resources": [
@@ -238,14 +239,30 @@ In a real-world organization, principals and roles might be used to represent va
                                    "principals": {
                                      "values": ["foo"]
                                    },
-                                   "resources": {
+                                   "roles": {
                                      "type": "NONE"
                                    }
                                  }
                                ]
         }
 
-11. The principal `foo` can unreserve resources reserved by itself and by the principal `bar`. The principal `bar`, however, can only unreserve its own resources. No other principals can unreserve resources.
+11. The principal `foo` can reserve resources only for roles `prod` and `dev`, and no other principal (or framework without a principal) can reserve resources for any role.
+
+        {
+          "permissive": false,
+          "reserve_resources": [
+                                 {
+                                   "principals": {
+                                     "values": ["foo"]
+                                   },
+                                   "roles": {
+                                     "values": ["prod", "dev"]
+                                   }
+                                 }
+                               ]
+        }
+
+12. The principal `foo` can unreserve resources reserved by itself and by the principal `bar`. The principal `bar`, however, can only unreserve its own resources. No other principals can unreserve resources.
 
         {
           "permissive": false,
@@ -269,7 +286,7 @@ In a real-world organization, principals and roles might be used to represent va
                                  ]
         }
 
-12. The principal `foo` can create persistent volumes, and no other principal can create persistent volumes.
+13. The principal `foo` can create persistent volumes for any role, and no other principal can create persistent volumes.
 
         {
           "permissive": false,
@@ -278,14 +295,45 @@ In a real-world organization, principals and roles might be used to represent va
                                 "principals": {
                                   "values": ["foo"]
                                 },
-                                "volume_types": {
+                                "roles": {
                                   "type": "ANY"
                                 }
                               }
                             ]
         }
 
-13. The principal `foo` can destroy volumes created by itself and by the principal `bar`. The principal `bar`, however, can only destroy its own volumes. No other principals can destroy volumes.
+14. The principal `foo` cannot create persistent volumes for any role, and any other principal can create persistent volumes for any role.
+
+        {
+          "create_volumes": [
+                              {
+                                "principals": {
+                                  "values": ["foo"]
+                                },
+                                "roles": {
+                                  "type": "NONE"
+                                }
+                              }
+                            ]
+        }
+
+15. The principal `foo` can create persistent volumes only for roles `prod` and `dev`, and no other principal can create persistent volumes for any role.
+
+        {
+          "permissive": false,
+          "create_volumes": [
+                              {
+                                "principals": {
+                                  "values": ["foo"]
+                                },
+                                "roles": {
+                                  "values": ["prod", "dev"]
+                                }
+                              }
+                            ]
+        }
+
+16. The principal `foo` can destroy volumes created by itself and by the principal `bar`. The principal `bar`, however, can only destroy its own volumes. No other principals can destroy volumes.
 
         {
           "permissive": false,
@@ -309,7 +357,7 @@ In a real-world organization, principals and roles might be used to represent va
                              ]
         }
 
-14. The principal `ops` can set quota for any role. The principal `foo`, however, can only set quota for `foo-role`. No other principals can set quota.
+17. The principal `ops` can set quota for any role. The principal `foo`, however, can only set quota for `foo-role`. No other principals can set quota.
 
         {
           "permissive": false,
@@ -333,7 +381,7 @@ In a real-world organization, principals and roles might be used to represent va
                         ]
         }
 
-15. The principal `ops` can remove quota which was set by any principal. The principal `foo`, however, can only remove quota which was set by itself. No other principals can remove quota.
+18. The principal `ops` can remove quota which was set by any principal. The principal `foo`, however, can only remove quota which was set by itself. No other principals can remove quota.
 
         {
           "permissive": false,
@@ -357,8 +405,8 @@ In a real-world organization, principals and roles might be used to represent va
                            ]
         }
 
-
-## Configuring authorization
+<a name="aclsConfiguration"></a>
+## Configuring Authorization
 
 Authorization is configured by specifying the `--acls` flag when starting the master:
 
@@ -366,7 +414,7 @@ Authorization is configured by specifying the `--acls` flag when starting the ma
            or a file path containing the JSON-formatted ACLs used
            for authorization. Path could be of the form 'file:///path/to/file'
            or '/path/to/file'.
-           See the ACLs protobuf in authorizer.proto for the expected format.
+           See the ACLs protobuf in [authorizer.proto](https://github.com/apache/mesos/blob/master/include/mesos/authorizer/authorizer.proto) for the expected format.
 
 For more information on master command-line flags, see the
 [configuration](configuration.md) page.

@@ -1,14 +1,15 @@
 ---
+title: Apache Mesos - Authentication
 layout: documentation
 ---
 
 # Authentication
 
-Authentication permits only trusted entities to interact with a Mesos cluster. Authentication is used by Mesos in three ways:
+Authentication permits only trusted entities to interact with a Mesos cluster. Authentication can be used by Mesos in three ways:
 
 1. To require that frameworks be authenticated in order to register with the master.
 2. To require that slaves be authenticated in order to register with the master.
-3. To require that operators be authenticated to use certain [HTTP endpoints](endpoints/index.md), such as `/teardown`.
+3. To require that operators be authenticated to use many [HTTP endpoints](endpoints/index.md).
 
 Authentication is disabled by default. When authentication is enabled, operators
 can configure Mesos to either use the default authentication module or to use a
@@ -59,6 +60,10 @@ Mesos master and slave processes. For more information, refer to the
   is `crammd5`, but additional modules can be added using the `--modules`
   option.
 
+* `--http_authenticators` - Specifies which HTTP authenticator module to use.
+  The default is `basic` (basic HTTP authentication), but additional modules can
+  be added using the `--modules` option.
+
 * `--credentials` - The path to a text file which contains a list (in plaintext
   or JSON format) of accepted credentials.  This may be optional depending on
   the authenticator being used.
@@ -71,6 +76,18 @@ Mesos master and slave processes. For more information, refer to the
 * `--credential` - Just like the master's `--credentials` option except that
   only one credential is allowed. This credential is used to identify the slave
   to the master.
+
+* `--[no-]authenticate_http` - If `true`, authentication is required to make
+  HTTP requests to the HTTP endpoints that support authentication. If `false`
+  (the default), all endpoints can be used without authentication.
+
+* `--http_authenticators` - Specifies which HTTP authenticator module to use.
+  The default is `basic`, but additional modules can be added using the
+  `--modules` option.
+
+* `--http_credentials` - The path to a text file which contains a list (in JSON
+  format) of accepted credentials.  This may be optional depending on the
+  authenticator being used.
 
 ### Framework
 

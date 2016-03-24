@@ -87,20 +87,21 @@ TEST(ProtobufTest, JSON)
 
   // TODO(bmahler): To dynamically generate a protobuf message,
   // see the commented-out code below.
-//  DescriptorProto proto;
-//
-//  proto.set_name("Message");
-//
-//  FieldDescriptorProto* field = proto.add_field();
-//  field->set_name("str");
-//  field->set_type(FieldDescriptorProto::TYPE_STRING);
-//
-//  const Descriptor* descriptor = proto.descriptor();
-//
-//  DynamicMessageFactory factory;
-//  Message* message = factory.GetPrototype(descriptor);
-//
-//  Reflection* message.getReflection();
+  //
+  //  DescriptorProto proto;
+  //
+  //  proto.set_name("Message");
+  //
+  //  FieldDescriptorProto* field = proto.add_field();
+  //  field->set_name("str");
+  //  field->set_type(FieldDescriptorProto::TYPE_STRING);
+  //
+  //  const Descriptor* descriptor = proto.descriptor();
+  //
+  //  DynamicMessageFactory factory;
+  //  Message* message = factory.GetPrototype(descriptor);
+  //
+  //  Reflection* message.getReflection();
 
   // The keys are in alphabetical order.
   string expected = strings::remove(
@@ -498,7 +499,7 @@ TEST(ProtobufTest, Jsonify)
       "}",
       " ");
 
-  EXPECT_EQ(expected, string(jsonify(message)));
+  EXPECT_EQ(expected, string(jsonify(JSON::Protobuf(message))));
 }
 
 
@@ -533,7 +534,13 @@ TEST(ProtobufTest, JsonifyArray)
   arrayMessage.add_values()->CopyFrom(message1);
   arrayMessage.add_values()->CopyFrom(message2);
 
-  EXPECT_EQ(expected, string(jsonify(arrayMessage.values())));
+  string actual = jsonify([&arrayMessage](JSON::ArrayWriter* writer) {
+    foreach (const tests::SimpleMessage& message, arrayMessage.values()) {
+      writer->element(JSON::Protobuf(message));
+    }
+  });
+
+  EXPECT_EQ(expected, actual);
 }
 
 
@@ -592,5 +599,5 @@ TEST(ProtobufTest, JsonifyLargeIntegers)
       " ");
 
   // Check JSON -> String.
-  EXPECT_EQ(expected, string(jsonify(message)));
+  EXPECT_EQ(expected, string(jsonify(JSON::Protobuf(message))));
 }

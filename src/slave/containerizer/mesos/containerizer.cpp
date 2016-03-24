@@ -669,8 +669,14 @@ Future<bool> MesosContainerizerProcess::launch(
 
   Container* container = new Container();
   container->directory = directory;
-  container->state = PREPARING;
+  container->state = PROVISIONING;
   container->resources = executorInfo.resources();
+
+  // We need to set the `launchInfos` to be a ready future initially
+  // before we starting calling isolator->prepare() because otherwise,
+  // the destroy will wait forever trying to wait for this future to
+  // be ready , which it never will. See MESOS-4878.
+  container->launchInfos = list<Option<ContainerLaunchInfo>>();
 
   containers_.put(containerId, Owned<Container>(container));
 
@@ -705,7 +711,12 @@ Future<bool> MesosContainerizerProcess::launch(
 
   const Image& image = executorInfo.container().mesos().image();
 
-  return provisioner->provision(containerId, image)
+  Future<ProvisionInfo> future =
+    provisioner->provision(containerId, image);
+
+  container->provisionInfos.push_back(future);
+
+  return future
     .then(defer(PID<MesosContainerizerProcess>(this),
                 &MesosContainerizerProcess::_launch,
                 containerId,
@@ -734,6 +745,19 @@ Future<bool> MesosContainerizerProcess::_launch(
   CHECK(executorInfo.has_container());
   CHECK_EQ(executorInfo.container().type(), ContainerInfo::MESOS);
 
+  // This is because even if a 'destroy' happens after 'launch' and
+  // before '_launch', the 'destroy' will wait for the 'provision' in
+  // 'launch' to finish. Since we register the '_launch' callback
+  // first, it is guaranteed to be called before '__destroy'.
+  CHECK(containers_.contains(containerId));
+
+  // Make sure containerizer is not in DESTROYING state, to avoid
+  // a possible race that containerizer is destroying the container
+  // while it is provisioning the image from volumes.
+  if (containers_[containerId]->state == DESTROYING) {
+    return Failure("Container is currently being destroyed");
+  }
+
   // We will provision the images specified in ContainerInfo::volumes
   // as well. We will mutate ContainerInfo::volumes to include the
   // paths to the provisioned root filesystems (by setting the
@@ -758,7 +782,10 @@ Future<bool> MesosContainerizerProcess::_launch(
 
     const Image& image = volume->image();
 
-    futures.push_back(provisioner->provision(containerId, image)
+    Future<ProvisionInfo> future = provisioner->provision(containerId, image);
+    containers_[containerId]->provisionInfos.push_back(future);
+
+    futures.push_back(future
       .then([=](const ProvisionInfo& info) -> Future<Nothing> {
         volume->set_host_path(info.rootfs);
 
@@ -780,7 +807,7 @@ Future<bool> MesosContainerizerProcess::_launch(
   // We put `prepare` inside of a lambda expression, in order to get
   // _executorInfo object after host path set in volume.
   return collect(futures)
-    .then([=]() -> Future<bool> {
+    .then(defer([=]() -> Future<bool> {
       return prepare(containerId,
                      taskInfo,
                      *_executorInfo,
@@ -797,7 +824,7 @@ Future<bool> MesosContainerizerProcess::_launch(
                     slavePid,
                     checkpoint,
                     lambda::_1));
-    });
+    }));
 }
 
 
@@ -831,6 +858,8 @@ Future<list<Option<ContainerLaunchInfo>>> MesosContainerizerProcess::prepare(
     const Option<ProvisionInfo>& provisionInfo)
 {
   CHECK(containers_.contains(containerId));
+
+  containers_[containerId]->state = PREPARING;
 
   // Construct ContainerConfig.
   ContainerConfig containerConfig;
@@ -1013,7 +1042,7 @@ Future<bool> MesosContainerizerProcess::__launch(
     // Process additional environment variables returned by isolators.
     if (launchInfo->has_environment()) {
       foreach (const Environment::Variable& variable,
-          launchInfo->environment().variables()) {
+               launchInfo->environment().variables()) {
         environment[variable.name()] = variable.value();
       }
     }
@@ -1062,8 +1091,22 @@ Future<bool> MesosContainerizerProcess::__launch(
       launchFlags.working_directory = workingDirectory;
     }
 
+#ifdef __WINDOWS__
+    if (!rootfs.isNone()) {
+      return Failure(
+          "`chroot` is not supported on Windows, but the `ContainerLaunchInfo` "
+          "provided a `rootfs` flag to the launcher");
+    }
+
+    if (!user.isNone()) {
+      return Failure(
+          "`su` is not supported on Windows, but the `ContainerLauncherInfo` "
+          "provided a `user` to the launcher");
+    }
+#else
     launchFlags.rootfs = rootfs;
     launchFlags.user = user;
+#endif // __WINDOWS__
     launchFlags.pipe_read = pipes[0];
     launchFlags.pipe_write = pipes[1];
     launchFlags.commands = commands;
@@ -1345,9 +1388,18 @@ Future<ContainerStatus> MesosContainerizerProcess::status(
     futures.push_back(isolator->status(containerId));
   }
 
-  // Using `await()` here so we can return partial status.
-  return await(futures).then(
-      lambda::bind(_status, containerId, lambda::_1));
+  // We are using `await` here since we are interested in partial
+  // results from calls to `isolator->status`. We also need to
+  // serialize the invocation to `await` in order to maintain the
+  // order of requests for `ContainerStatus` by the agent.  See
+  // MESOS-4671 for more details.
+  VLOG(2) << "Serializing status request for container: " << containerId;
+
+  return containers_[containerId]->sequence.add<ContainerStatus>(
+      [=]() -> Future<ContainerStatus> {
+        return await(futures)
+          .then(lambda::bind(_status, containerId, lambda::_1));
+      });
 }
 
 
@@ -1367,6 +1419,25 @@ void MesosContainerizerProcess::destroy(
   }
 
   LOG(INFO) << "Destroying container '" << containerId << "'";
+
+  if (container->state == PROVISIONING) {
+    VLOG(1) << "Waiting for the provisioner to complete for container '"
+            << containerId << "'";
+
+    container->state = DESTROYING;
+
+    // Wait for the provisioner to finish provisioning before we
+    // start destroying the container.
+    await(container->provisionInfos)
+      .onAny(defer(
+          self(),
+          &Self::___destroy,
+          containerId,
+          None(),
+          "Container destroyed while provisioning images"));
+
+    return;
+  }
 
   if (container->state == PREPARING) {
     VLOG(1) << "Waiting for the isolators to complete preparing before "

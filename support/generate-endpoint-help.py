@@ -45,9 +45,16 @@ AGENT_COMMAND = [
 
 # A header to add onto all generated markdown files.
 MARKDOWN_HEADER = (
-'<!--- This is an automatically generated file. DO NOT EDIT! --->\n'
+"""---
+title: %s
+layout: documentation
+---
+<!--- This is an automatically generated file. DO NOT EDIT! --->
+"""
 )
 
+# A template of the title to add onto all generated markdown files.
+MARKDOWN_TITLE = "Apache Mesos - HTTP Endpoints%s"
 
 # A global timeout as well as a retry interval when hitting any http
 # endpoints on the master or agent (in seconds).
@@ -127,7 +134,7 @@ def get_help(ip, port):
 
 
 def generalize_endpoint_id(id):
-  """Generalizes the id of the form e.g. process(id) to slave(id)."""
+  """Generalizes the id of the form e.g. process(1) to process(id)."""
   return re.sub('\([0-9]+\)', '(id)', id)
 
 
@@ -143,12 +150,22 @@ def get_endpoint_path(id, name):
                ('process(id)', '/')     -> '/process(id)'
                ('process', '/endpoint') -> '/process/endpoint'
   """
-  new_id = generalize_endpoint_id(id)
-  new_name = name[1:] # Strip the leading slash
-  if new_name:
-    return posixpath.join('/', new_id, new_name)
-  else:
-    return posixpath.join('/', new_id)
+  # Tokenize the endpoint by '/' (filtering out any empty strings between '/'s)
+  path_parts = filter(None, name.split('/'))
+
+  # Conditionally prepend the 'id' to the list of path parts.
+  # Following the notion of a 'delegate' in Mesos, we want our
+  # preferred endpoint paths for the delegate process to be
+  # '/endpoint' instead of '/process/endpoint'. Since this script only
+  # starts 1 master and 1 slave, our only delegate processes are
+  # "master" and "slave(id)". If the id matches one of these, we don't
+  # prepend it, otherwise we do.
+  id = generalize_endpoint_id(id)
+  delegates = ["master", "slave(id)"]
+  if id not in delegates:
+    path_parts = [id] + path_parts
+
+  return posixpath.join('/', *path_parts)
 
 
 def get_relative_md_path(id, name):
@@ -169,7 +186,7 @@ def get_relative_md_path(id, name):
     return os.path.join(new_id + '.md')
 
 
-def write_markdown(path, output):
+def write_markdown(path, output, title):
   """Writes 'output' to the file at 'path'."""
   print 'generating: %s' % (path)
 
@@ -181,7 +198,7 @@ def write_markdown(path, output):
 
   # Add our header and remove all '\n's at the end of the output if
   # there are any.
-  output = MARKDOWN_HEADER + '\n' + output.rstrip()
+  output = (MARKDOWN_HEADER % title) + '\n' + output.rstrip()
 
   outfile.write(output)
   outfile.close()
@@ -199,8 +216,7 @@ def dump_index_markdown(master_help, agent_help):
   # strings contained in the "Master Endpoints" and "Agent Endpoints"
   # sections of this template.
   output = (
-"""
-# HTTP Endpoints #
+"""# HTTP Endpoints #
 
 Below is a list of HTTP endpoints available for a given Mesos process.
 
@@ -265,7 +281,7 @@ For example, http://agent.com:5051/files/browse
                      generate_links(agent_help))
 
   path = os.path.join(options['output_path'], 'index.md')
-  write_markdown(path, output)
+  write_markdown(path, output, MARKDOWN_TITLE % "")
 
 
 def dump_markdown(help):
@@ -279,10 +295,11 @@ def dump_markdown(help):
     for endpoint in process['endpoints']:
       name = endpoint['name']
       text = endpoint['text']
+      title = get_endpoint_path(id, name)
 
       relative_path = get_relative_md_path(id, name)
       path = os.path.join(options['output_path'], relative_path)
-      write_markdown(path, text)
+      write_markdown(path, text, MARKDOWN_TITLE % (" - " + title))
 
 
 def start_master():
@@ -313,10 +330,15 @@ def start_agent():
   return agent
 
 
+def cleanup_on_exit():
+  if current_subprocess:
+    current_subprocess.kill()
+
+
 if __name__ == '__main__':
   parse_options()
 
-  atexit.register(lambda: current_subprocess.kill())
+  atexit.register(cleanup_on_exit)
 
   current_subprocess = start_master()
   master_help = get_help(HOST_IP, MASTER_PORT)

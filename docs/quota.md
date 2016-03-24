@@ -1,4 +1,5 @@
 ---
+title: Apache Mesos - Quota
 layout: documentation
 ---
 
@@ -26,6 +27,7 @@ For the purpose of this document, an “Operator” is a person, tool, or script
 that manages the Mesos cluster.
 
 In computer science, a “quota” usually refers to one of the following:
+
 * A minimal guarantee.
 * A maximal limit.
 * A pair of both.
@@ -60,9 +62,9 @@ introducing preemption for running tasks.
 
 # Operator HTTP Endpoint
 
-The master `/quota` HTTP endpoint enables operators to configure quotas. The
-endpoint currently offers a REST-like interface and supports the
-following operations:
+The master [/quota](endpoints/master/quota.md) HTTP endpoint enables operators
+to configure quotas. The endpoint currently offers a REST-like interface and
+supports the following operations:
 
 * [Setting](#setRequest) a new quota with POST.
 * [Removing](#removeRequest) an existing quota with DELETE.

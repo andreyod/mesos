@@ -30,6 +30,7 @@
 #include <process/clock.hpp>
 #include <process/future.hpp>
 #include <process/gmock.hpp>
+#include <process/owned.hpp>
 #include <process/pid.hpp>
 
 #include <stout/some.hpp>
@@ -52,7 +53,9 @@ using mesos::internal::master::Master;
 
 using mesos::internal::slave::Slave;
 
+using process::Clock;
 using process::Future;
+using process::Owned;
 using process::PID;
 
 using std::map;
@@ -86,18 +89,19 @@ TEST_F(ReservationTest, ReserveThenUnreserve)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:1;mem:512";
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   // We use the filter explicitly here so that the resources will not
   // be filtered for 5 seconds (the default).
@@ -159,8 +163,6 @@ TEST_F(ReservationTest, ReserveThenUnreserve)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -179,18 +181,19 @@ TEST_F(ReservationTest, ReserveTwiceWithDoubleValue)
   master::Flags masterFlags = CreateMasterFlags();
   masterFlags.allocation_interval = Milliseconds(5);
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:24;mem:4096";
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   // We use the filter explicitly here so that the resources will not
   // be filtered (default would be 5 seconods).
@@ -260,8 +263,6 @@ TEST_F(ReservationTest, ReserveTwiceWithDoubleValue)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -282,20 +283,24 @@ TEST_F(ReservationTest, ReserveAndLaunchThenUnreserve)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   MockExecutor exec(DEFAULT_EXECUTOR_ID);
+  TestContainerizer containerizer(&exec);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:1;mem:512";
 
-  Try<PID<Slave>> slave = StartSlave(&exec, slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+
+  Try<Owned<cluster::Slave>> slave =
+    StartSlave(detector.get(), &containerizer, slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Resources unreserved = Resources::parse("cpus:1;mem:512").get();
   Resources dynamicallyReserved = unreserved.flatten(
@@ -375,8 +380,6 @@ TEST_F(ReservationTest, ReserveAndLaunchThenUnreserve)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -402,22 +405,23 @@ TEST_F(ReservationTest, ReserveShareWithinRole)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = role;
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:1;mem:512";
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched1;
   MesosSchedulerDriver driver1(
-      &sched1, frameworkInfo1, master.get(), DEFAULT_CREDENTIAL);
+      &sched1, frameworkInfo1, master.get()->pid, DEFAULT_CREDENTIAL);
 
   MockScheduler sched2;
   MesosSchedulerDriver driver2(
-      &sched2, frameworkInfo2, master.get(), DEFAULT_CREDENTIAL);
+      &sched2, frameworkInfo2, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Resources unreserved = Resources::parse("cpus:1;mem:512").get();
   Resources dynamicallyReserved = unreserved.flatten(
@@ -492,8 +496,6 @@ TEST_F(ReservationTest, ReserveShareWithinRole)
 
   driver2.stop();
   driver2.join();
-
-  Shutdown();
 }
 
 
@@ -513,7 +515,7 @@ TEST_F(ReservationTest, DropReserveTooLarge)
 
   EXPECT_CALL(allocator, initialize(_, _, _, _));
 
-  Try<PID<Master>> master = StartMaster(&allocator, masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(&allocator, masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
@@ -521,12 +523,13 @@ TEST_F(ReservationTest, DropReserveTooLarge)
 
   EXPECT_CALL(allocator, addSlave(_, _, _, _, _));
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Resources unreserved = Resources::parse("cpus:1;mem:512").get();
   Resources unreservedTooLarge = Resources::parse("cpus:1;mem:1024").get();
@@ -584,8 +587,6 @@ TEST_F(ReservationTest, DropReserveTooLarge)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -604,7 +605,7 @@ TEST_F(ReservationTest, DropReserveStaticReservation)
 
   EXPECT_CALL(allocator, initialize(_, _, _, _));
 
-  Try<PID<Master>> master = StartMaster(&allocator, masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(&allocator, masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
@@ -612,12 +613,13 @@ TEST_F(ReservationTest, DropReserveStaticReservation)
 
   EXPECT_CALL(allocator, addSlave(_, _, _, _, _));
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Resources staticallyReserved =
     Resources::parse("cpus(role):1;mem(role):512").get();
@@ -673,8 +675,6 @@ TEST_F(ReservationTest, DropReserveStaticReservation)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -691,18 +691,19 @@ TEST_F(ReservationTest, SendingCheckpointResourcesMessage)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:8;mem:4096";
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Resources unreserved1 = Resources::parse("cpus:8").get();
   Resources reserved1 = unreserved1.flatten(
@@ -774,8 +775,6 @@ TEST_F(ReservationTest, SendingCheckpointResourcesMessage)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -791,19 +790,20 @@ TEST_F(ReservationTest, ResourcesCheckpointing)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.recover = "reconnect";
   slaveFlags.resources = "cpus:8;mem:4096";
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Resources unreserved = Resources::parse("cpus:8;mem:2048").get();
   Resources reserved = unreserved.flatten(
@@ -830,7 +830,7 @@ TEST_F(ReservationTest, ResourcesCheckpointing)
   EXPECT_TRUE(Resources(offer.resources()).contains(unreserved));
 
   Future<CheckpointResourcesMessage> checkpointResources =
-    FUTURE_PROTOBUF(CheckpointResourcesMessage(), _, slave.get());
+    FUTURE_PROTOBUF(CheckpointResourcesMessage(), _, slave.get()->pid);
 
   // We use the filter explicitly here so that the resources
   // will not be filtered for 5 seconds (the default).
@@ -844,14 +844,14 @@ TEST_F(ReservationTest, ResourcesCheckpointing)
   AWAIT_READY(checkpointResources);
 
   // Restart the slave without shutting down.
-  Stop(slave.get(), false);
+  slave.get()->terminate();
 
   Future<ReregisterSlaveMessage> reregisterSlave =
     FUTURE_PROTOBUF(ReregisterSlaveMessage(), _, _);
 
   Future<Nothing> slaveRecover = FUTURE_DISPATCH(_, &Slave::recover);
 
-  slave = StartSlave(slaveFlags);
+  slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   // Expect the slave to recover.
@@ -865,8 +865,6 @@ TEST_F(ReservationTest, ResourcesCheckpointing)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -882,15 +880,15 @@ TEST_F(ReservationTest, MasterFailover)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master1 = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master1 = StartMaster(masterFlags);
   ASSERT_SOME(master1);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:8;mem:2048";
 
-  StandaloneMasterDetector detector(master1.get());
+  StandaloneMasterDetector detector(master1.get()->pid);
 
-  Try<PID<Slave>> slave = StartSlave(&detector, slaveFlags);
+  Try<Owned<cluster::Slave>> slave = StartSlave(&detector, slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
@@ -919,7 +917,7 @@ TEST_F(ReservationTest, MasterFailover)
   Offer offer = offers.get()[0];
 
   Future<CheckpointResourcesMessage> checkpointResources =
-    FUTURE_PROTOBUF(CheckpointResourcesMessage(), _, slave.get());
+    FUTURE_PROTOBUF(CheckpointResourcesMessage(), _, slave.get()->pid);
 
   // We use the filter explicitly here so that the resources
   // will not be filtered for 5 seconds (the default).
@@ -933,16 +931,16 @@ TEST_F(ReservationTest, MasterFailover)
   AWAIT_READY(checkpointResources);
 
   // This is to make sure CheckpointResourcesMessage is processed.
-  process::Clock::pause();
-  process::Clock::settle();
-  process::Clock::resume();
+  Clock::pause();
+  Clock::settle();
+  Clock::resume();
 
   EXPECT_CALL(sched, disconnected(&driver));
 
   // Simulate master failover by restarting the master.
-  Stop(master1.get());
+  master1->reset();
 
-  Try<PID<Master>> master2 = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master2 = StartMaster(masterFlags);
   ASSERT_SOME(master2);
 
   Future<SlaveReregisteredMessage> slaveReregistered =
@@ -956,7 +954,7 @@ TEST_F(ReservationTest, MasterFailover)
 
   // Simulate a new master detected event on the slave so that the
   // slave will do a re-registration.
-  detector.appoint(master2.get());
+  detector.appoint(master2.get()->pid);
 
   // Wait for slave to confirm re-registration.
   AWAIT_READY(slaveReregistered);
@@ -971,8 +969,6 @@ TEST_F(ReservationTest, MasterFailover)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -997,24 +993,23 @@ TEST_F(ReservationTest, CompatibleCheckpointedResources)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:8;mem:4096";
 
   MockExecutor exec(DEFAULT_EXECUTOR_ID);
-
   TestContainerizer containerizer(&exec);
 
-  StandaloneMasterDetector detector(master.get());
+  StandaloneMasterDetector detector(master.get()->pid);
 
   MockSlave slave1(slaveFlags, &detector, &containerizer);
   spawn(slave1);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Resources unreserved = Resources::parse("cpus:8;mem:2048").get();
   Resources reserved = unreserved.flatten(
@@ -1088,8 +1083,6 @@ TEST_F(ReservationTest, CompatibleCheckpointedResources)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -1106,24 +1099,23 @@ TEST_F(ReservationTest, CompatibleCheckpointedResourcesWithPersistentVolumes)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:8;mem:4096;disk:2048";
 
   MockExecutor exec(DEFAULT_EXECUTOR_ID);
-
   TestContainerizer containerizer(&exec);
 
-  StandaloneMasterDetector detector(master.get());
+  StandaloneMasterDetector detector(master.get()->pid);
 
   MockSlave slave1(slaveFlags, &detector, &containerizer);
   spawn(slave1);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Resources unreserved = Resources::parse("cpus:8;mem:2048").get();
   Resources reserved = unreserved.flatten(
@@ -1217,8 +1209,6 @@ TEST_F(ReservationTest, CompatibleCheckpointedResourcesWithPersistentVolumes)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -1234,24 +1224,23 @@ TEST_F(ReservationTest, IncompatibleCheckpointedResources)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:8;mem:4096";
 
   MockExecutor exec(DEFAULT_EXECUTOR_ID);
-
   TestContainerizer containerizer(&exec);
 
-  StandaloneMasterDetector detector(master.get());
+  StandaloneMasterDetector detector(master.get()->pid);
 
   MockSlave slave1(slaveFlags, &detector, &containerizer);
   spawn(slave1);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Resources unreserved = Resources::parse("cpus:8;mem:2048").get();
   Resources reserved = unreserved.flatten(
@@ -1324,8 +1313,6 @@ TEST_F(ReservationTest, IncompatibleCheckpointedResources)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -1335,12 +1322,13 @@ TEST_F(ReservationTest, GoodACLReserveThenUnreserve)
 {
   ACLs acls;
 
-  // This principal can reserve any resources.
+  // The principal of `DEFAULT_CREDENTIAL` can reserve resources for any role.
   mesos::ACL::ReserveResources* reserve = acls.add_reserve_resources();
   reserve->mutable_principals()->add_values(DEFAULT_CREDENTIAL.principal());
-  reserve->mutable_resources()->set_type(mesos::ACL::Entity::ANY);
+  reserve->mutable_roles()->set_type(mesos::ACL::Entity::ANY);
 
-  // This principal can unreserve its own reserved resources.
+  // The principal of `DEFAULT_CREDENTIAL` can unreserve
+  // its own reserved resources.
   mesos::ACL::UnreserveResources* unreserve = acls.add_unreserve_resources();
   unreserve->mutable_principals()->add_values(DEFAULT_CREDENTIAL.principal());
   unreserve->mutable_reserver_principals()->add_values(
@@ -1355,20 +1343,21 @@ TEST_F(ReservationTest, GoodACLReserveThenUnreserve)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   // Create a slave.
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:1;mem:512";
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   // Create a scheduler.
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   // We use the filter explicitly here so that the resources will not
   // be filtered for 5 seconds (the default).
@@ -1430,8 +1419,6 @@ TEST_F(ReservationTest, GoodACLReserveThenUnreserve)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -1444,7 +1431,7 @@ TEST_F(ReservationTest, BadACLDropReserve)
   // No entity can reserve any resources.
   mesos::ACL::ReserveResources* reserve = acls.add_reserve_resources();
   reserve->mutable_principals()->set_type(mesos::ACL::Entity::NONE);
-  reserve->mutable_resources()->set_type(mesos::ACL::Entity::ANY);
+  reserve->mutable_roles()->set_type(mesos::ACL::Entity::ANY);
 
   FrameworkInfo frameworkInfo = DEFAULT_FRAMEWORK_INFO;
   frameworkInfo.set_role("role");
@@ -1455,20 +1442,21 @@ TEST_F(ReservationTest, BadACLDropReserve)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   // Create a slave.
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:1;mem:512";
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   // Create a scheduler.
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   // We use the filter explicitly here so that the resources will not
   // be filtered for 5 seconds (the default).
@@ -1516,8 +1504,6 @@ TEST_F(ReservationTest, BadACLDropReserve)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -1527,10 +1513,10 @@ TEST_F(ReservationTest, BadACLDropUnreserve)
 {
   ACLs acls;
 
-  // This principal can reserve any resources.
+  // This principal can reserve resources for any role.
   mesos::ACL::ReserveResources* reserve = acls.add_reserve_resources();
   reserve->mutable_principals()->add_values(DEFAULT_CREDENTIAL.principal());
-  reserve->mutable_resources()->set_type(mesos::ACL::Entity::ANY);
+  reserve->mutable_roles()->set_type(mesos::ACL::Entity::ANY);
 
   // This principal cannot unreserve any resources.
   mesos::ACL::UnreserveResources* unreserve = acls.add_unreserve_resources();
@@ -1546,20 +1532,21 @@ TEST_F(ReservationTest, BadACLDropUnreserve)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   // Create a slave.
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:2;mem:1024";
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   // Create a scheduler.
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   // We use the filter explicitly here so that the resources will not
   // be filtered for 5 seconds (the default).
@@ -1639,8 +1626,6 @@ TEST_F(ReservationTest, BadACLDropUnreserve)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -1650,14 +1635,14 @@ TEST_F(ReservationTest, ACLMultipleOperations)
 {
   // Pause the clock and control it manually in order to
   // control the timing of the offer cycle.
-  process::Clock::pause();
+  Clock::pause();
 
   ACLs acls;
 
-  // This principal can reserve any resources.
+  // This principal can reserve resources for any role.
   mesos::ACL::ReserveResources* reserve = acls.add_reserve_resources();
   reserve->mutable_principals()->add_values(DEFAULT_CREDENTIAL.principal());
-  reserve->mutable_resources()->set_type(mesos::ACL::Entity::ANY);
+  reserve->mutable_roles()->set_type(mesos::ACL::Entity::ANY);
 
   // This principal cannot unreserve any resources.
   mesos::ACL::UnreserveResources* unreserve = acls.add_unreserve_resources();
@@ -1673,22 +1658,26 @@ TEST_F(ReservationTest, ACLMultipleOperations)
   masterFlags.allocation_interval = Milliseconds(5);
   masterFlags.roles = frameworkInfo.role();
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   MockExecutor exec(DEFAULT_EXECUTOR_ID);
+  TestContainerizer containerizer(&exec);
 
   // Create a slave.
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:2;mem:1024";
 
-  Try<PID<Slave>> slave = StartSlave(&exec, slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+
+  Try<Owned<cluster::Slave>> slave =
+    StartSlave(detector.get(), &containerizer, slaveFlags);
   ASSERT_SOME(slave);
 
   // Create a scheduler.
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   // We use the filter explicitly here so that the resources will not
   // be filtered for 5 seconds (the default).
@@ -1715,8 +1704,8 @@ TEST_F(ReservationTest, ACLMultipleOperations)
   driver.start();
 
   // Advance the clock to generate an offer.
-  process::Clock::settle();
-  process::Clock::advance(masterFlags.allocation_interval);
+  Clock::settle();
+  Clock::advance(masterFlags.allocation_interval);
 
   // In the first offer, expect an offer with unreserved resources.
   AWAIT_READY(offers);
@@ -1734,8 +1723,8 @@ TEST_F(ReservationTest, ACLMultipleOperations)
   // Reserve the first set of resources.
   driver.acceptOffers({offer.id()}, {RESERVE(dynamicallyReserved1)}, filters);
 
-  process::Clock::settle();
-  process::Clock::advance(masterFlags.allocation_interval);
+  Clock::settle();
+  Clock::advance(masterFlags.allocation_interval);
 
   // In the next offer, expect an offer with reserved resources.
   AWAIT_READY(offers);
@@ -1780,8 +1769,8 @@ TEST_F(ReservationTest, ACLMultipleOperations)
   AWAIT_READY(statusUpdateAcknowledgement);
   EXPECT_EQ(TASK_FINISHED, statusUpdateAcknowledgement.get().state());
 
-  process::Clock::settle();
-  process::Clock::advance(masterFlags.allocation_interval);
+  Clock::settle();
+  Clock::advance(masterFlags.allocation_interval);
 
   // In the next offer, expect to find both sets of reserved
   // resources, since the Unreserve operation should fail.
@@ -1819,8 +1808,8 @@ TEST_F(ReservationTest, ACLMultipleOperations)
        LAUNCH({taskInfo2})},
       filters);
 
-  process::Clock::settle();
-  process::Clock::advance(masterFlags.allocation_interval);
+  Clock::settle();
+  Clock::advance(masterFlags.allocation_interval);
 
   // In the next offer, expect to find the reserved resources.
   AWAIT_READY(offers);
@@ -1842,21 +1831,16 @@ TEST_F(ReservationTest, ACLMultipleOperations)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
-// This tests that reserve operations containing `ReservationInfo`
-// with no principal set will be invalidated correctly.
-//
-// TODO(greggomann): Change this test once dynamic reservation without a
-// principal is permitted in 0.28.
-TEST_F(ReservationTest, NoAuthentication)
+// Confirms that reserve and unreserve operations work without authentication
+// when a framework has no principal.
+TEST_F(ReservationTest, WithoutAuthenticationWithoutPrincipal)
 {
   // Pause the clock and control it manually in order to
   // control the timing of the offer cycle.
-  process::Clock::pause();
+  Clock::pause();
 
   // Create a framework without a principal.
   FrameworkInfo frameworkInfo = DEFAULT_FRAMEWORK_INFO;
@@ -1865,20 +1849,20 @@ TEST_F(ReservationTest, NoAuthentication)
 
   // Create a master with no framework authentication.
   master::Flags masterFlags = CreateMasterFlags();
-  masterFlags.roles = frameworkInfo.role();
   masterFlags.authenticate_frameworks = false;
 
-  Try<PID<Master>> master = StartMaster(masterFlags);
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
   ASSERT_SOME(master);
 
   slave::Flags slaveFlags = CreateSlaveFlags();
   slaveFlags.resources = "cpus:1;mem:512";
 
-  Try<PID<Slave>> slave = StartSlave(slaveFlags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
-  MesosSchedulerDriver driver(&sched, frameworkInfo, master.get());
+  MesosSchedulerDriver driver(&sched, frameworkInfo, master.get()->pid);
 
   // We use the filter explicitly here so that the resources will not
   // be filtered for 5 seconds (the default).
@@ -1897,7 +1881,7 @@ TEST_F(ReservationTest, NoAuthentication)
 
   EXPECT_CALL(sched, registered(&driver, _, _));
 
-  // The expectation for the first offer.
+  // An expectation for an offer with unreserved resources.
   EXPECT_CALL(sched, resourceOffers(&driver, _))
     .WillOnce(FutureArg<1>(&offers));
 
@@ -1911,30 +1895,147 @@ TEST_F(ReservationTest, NoAuthentication)
 
   EXPECT_TRUE(Resources(offer.resources()).contains(unreserved));
 
-  // The expectation for the next offer.
+  // The expectation for the offer with reserved resources.
   EXPECT_CALL(sched, resourceOffers(&driver, _))
     .WillOnce(FutureArg<1>(&offers));
 
-  // Attempt to reserve the resources. This should fail because currently,
-  // reserve operations with no principal are invalid.
+  // Attempt to reserve the resources.
   driver.acceptOffers({offer.id()}, {RESERVE(dynamicallyReserved)}, filters);
 
-  process::Clock::settle();
-  process::Clock::advance(masterFlags.allocation_interval);
+  Clock::settle();
+  Clock::advance(masterFlags.allocation_interval);
 
   AWAIT_READY(offers);
 
   ASSERT_EQ(1u, offers.get().size());
   offer = offers.get()[0];
 
-  // Make sure that the reservation did not succeed and the correct unreserved
-  // resources are still there.
+  // Make sure that the reservation succeeded.
+  EXPECT_TRUE(Resources(offer.resources()).contains(dynamicallyReserved));
+
+  // An expectation for an offer with unreserved resources.
+  EXPECT_CALL(sched, resourceOffers(&driver, _))
+    .WillOnce(FutureArg<1>(&offers));
+
+  // Unreserve the resources.
+  driver.acceptOffers(
+      {offer.id()}, {UNRESERVE(dynamicallyReserved)}, filters);
+
+  Clock::settle();
+  Clock::advance(masterFlags.allocation_interval);
+
+  // In the next offer, expect an offer with unreserved resources.
+  AWAIT_READY(offers);
+
+  ASSERT_EQ(1u, offers.get().size());
+  offer = offers.get()[0];
+
   EXPECT_TRUE(Resources(offer.resources()).contains(unreserved));
 
   driver.stop();
   driver.join();
+}
 
-  Shutdown();
+
+// Confirms that reserve and unreserve operations work without authentication
+// when a framework has a principal.
+TEST_F(ReservationTest, WithoutAuthenticationWithPrincipal)
+{
+  // Pause the clock and control it manually in order to
+  // control the timing of the offer cycle.
+  Clock::pause();
+
+  // Create a framework with a principal.
+  FrameworkInfo frameworkInfo = DEFAULT_FRAMEWORK_INFO;
+  frameworkInfo.set_role("role");
+
+  // Create a master with no framework authentication.
+  master::Flags masterFlags = CreateMasterFlags();
+  masterFlags.authenticate_frameworks = false;
+
+  Try<Owned<cluster::Master>> master = StartMaster(masterFlags);
+  ASSERT_SOME(master);
+
+  slave::Flags slaveFlags = CreateSlaveFlags();
+  slaveFlags.resources = "cpus:1;mem:512";
+
+  Owned<MasterDetector> detector = master.get()->createDetector();
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), slaveFlags);
+  ASSERT_SOME(slave);
+
+  MockScheduler sched;
+  MesosSchedulerDriver driver(&sched, frameworkInfo, master.get()->pid);
+
+  // We use the filter explicitly here so that the resources will not
+  // be filtered for 5 seconds (the default).
+  Filters filters;
+  filters.set_refuse_seconds(0);
+
+  Resources unreserved = Resources::parse("cpus:1;mem:512").get();
+
+  // Create dynamically reserved resources whose `ReservationInfo` contains a
+  // principal.
+  Resources dynamicallyReserved = unreserved.flatten(
+      frameworkInfo.role(), createReservationInfo(frameworkInfo.principal()));
+
+  // We use this to capture offers from `resourceOffers`.
+  Future<vector<Offer>> offers;
+
+  EXPECT_CALL(sched, registered(&driver, _, _));
+
+  // An expectation for an offer with unreserved resources.
+  EXPECT_CALL(sched, resourceOffers(&driver, _))
+    .WillOnce(FutureArg<1>(&offers));
+
+  driver.start();
+
+  // In the first offer, expect an offer with unreserved resources.
+  AWAIT_READY(offers);
+
+  ASSERT_EQ(1u, offers.get().size());
+  Offer offer = offers.get()[0];
+
+  EXPECT_TRUE(Resources(offer.resources()).contains(unreserved));
+
+  // The expectation for the offer with reserved resources.
+  EXPECT_CALL(sched, resourceOffers(&driver, _))
+    .WillOnce(FutureArg<1>(&offers));
+
+  // Attempt to reserve the resources.
+  driver.acceptOffers({offer.id()}, {RESERVE(dynamicallyReserved)}, filters);
+
+  Clock::settle();
+  Clock::advance(masterFlags.allocation_interval);
+
+  AWAIT_READY(offers);
+
+  ASSERT_EQ(1u, offers.get().size());
+  offer = offers.get()[0];
+
+  // Make sure that the reservation succeeded.
+  EXPECT_TRUE(Resources(offer.resources()).contains(dynamicallyReserved));
+
+  // An expectation for an offer with unreserved resources.
+  EXPECT_CALL(sched, resourceOffers(&driver, _))
+    .WillOnce(FutureArg<1>(&offers));
+
+  // Unreserve the resources.
+  driver.acceptOffers(
+      {offer.id()}, {UNRESERVE(dynamicallyReserved)}, filters);
+
+  Clock::settle();
+  Clock::advance(masterFlags.allocation_interval);
+
+  // In the next offer, expect an offer with unreserved resources.
+  AWAIT_READY(offers);
+
+  ASSERT_EQ(1u, offers.get().size());
+  offer = offers.get()[0];
+
+  EXPECT_TRUE(Resources(offer.resources()).contains(unreserved));
+
+  driver.stop();
+  driver.join();
 }
 
 }  // namespace tests {

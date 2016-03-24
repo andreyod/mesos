@@ -40,6 +40,7 @@ namespace process {
 string HELP(
     const string& tldr,
     const Option<string>& description,
+    const Option<string>& authentication,
     const Option<string>& references)
 {
   // Construct the help string.
@@ -58,6 +59,13 @@ string HELP(
       description.get();
   }
 
+  if (authentication.isSome()) {
+    help +=
+      "\n"
+      "### AUTHENTICATION ###\n" +
+      authentication.get();
+  }
+
   if (!strings::endsWith(help, "\n")) {
     help += "\n";
   }
@@ -71,7 +79,9 @@ string HELP(
 }
 
 
-Help::Help() : ProcessBase("help") {}
+Help::Help(const Option<string>& _delegate)
+  : ProcessBase("help"),
+    delegate(_delegate) {}
 
 
 string Help::getUsagePath(const string& id, const string& name)
@@ -91,7 +101,13 @@ void Help::add(
     const string path = "/" + getUsagePath(id, name);
 
     if (help.isSome()) {
-      string usage = "### USAGE ###\n" + USAGE(path) + "\n";
+      string usage = "### USAGE ###\n";
+      // If a delegate is set, we have 2 valid endpoints we could hit.
+      // /name *and* /id/name. Add it in.
+      if (delegate == id) {
+        usage += USAGE(getUsagePath("", name));
+      }
+      usage += USAGE(path) + "\n";
       helps[id][name] = usage + help.get();
     } else {
       helps[id][name] = "## No help page for `" + path + "`\n";

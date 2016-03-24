@@ -20,13 +20,15 @@
 #include <list>
 #include <vector>
 
-#include <mesos/slave/container_logger.hpp>
-#include <mesos/slave/isolator.hpp>
+#include <process/sequence.hpp>
 
 #include <process/metrics/counter.hpp>
 
 #include <stout/hashmap.hpp>
 #include <stout/multihashmap.hpp>
+
+#include <mesos/slave/container_logger.hpp>
+#include <mesos/slave/isolator.hpp>
 
 #include "slave/state.hpp"
 
@@ -283,6 +285,7 @@ private:
 
   enum State
   {
+    PROVISIONING,
     PREPARING,
     ISOLATING,
     FETCHING,
@@ -299,6 +302,11 @@ private:
     // executor because we'll only get a single notification when
     // the executor exits.
     process::Future<Option<int>> status;
+
+    // We keep track of the future that is waiting for the provisioner's
+    // `ProvisionInfo`, so that destroy will only start calling
+    // provisioner->destroy after provisioner->provision has finished.
+    std::list<process::Future<ProvisionInfo>> provisionInfos;
 
     // We keep track of the future that is waiting for all the
     // isolators' prepare futures, so that destroy will only start
@@ -323,6 +331,11 @@ private:
     std::string directory;
 
     State state;
+
+    // Used when `status` needs to be collected from isolators
+    // associated with this container. `Sequence` allows us to
+    // maintain the order of `status` requests for a given container.
+    process::Sequence sequence;
   };
 
   hashmap<ContainerID, process::Owned<Container>> containers_;

@@ -1,4 +1,5 @@
 ---
+title: Apache Mesos - Roles
 layout: documentation
 ---
 
@@ -98,9 +99,9 @@ agent node are initially assigned to the `*` role (this can be changed via the
 The `*` role behaves differently from non-default roles. For example, dynamic
 reservations can be used to reassign resources from the `*` role to a specific
 role, but not from one specific role to another specific role (without first
-unreserving the resource, e.g., using the `/unreserve` operator HTTP
-endpoint). Similarly, persistent volumes cannot be created on unreserved
-resources.
+unreserving the resource, e.g., using the [/unreserve](endpoints/master/unreserve.md)
+operator HTTP endpoint). Similarly, persistent volumes cannot be created on
+unreserved resources.
 
 ## Invalid role
 
@@ -118,10 +119,12 @@ resources. In particular, this implementation of DRF first identifies which
 _role_ is furthest below its fair share of the role's dominant resource. Each of
 the frameworks in that role are then offered additional resources in turn.
 
-The resource allocation process can be customized by assigning _weights_ to
-roles: a role with a weight of 2 will be allocated twice the fair share of a
-role with a weight of 1. Weights are optional, and can be specified via the
-`--weights` command-line flag when starting the Mesos master.
+The resource allocation process can be customized by assigning
+_[weights](weights.md)_ to roles: a role with a weight of 2 will be allocated
+twice the fair share of a role with a weight of 1. By default, every role has a
+weight of 1. Weights can be configured using the
+[/weights](endpoints/master/weights.md) operator endpoint, or else using the
+deprecated `--weights` command-line flag when starting the Mesos master.
 
 
 ## Role vs. Principal

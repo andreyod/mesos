@@ -105,14 +105,11 @@ namespace operation {
 // Validates the RESERVE operation.
 Option<Error> validate(
     const Offer::Operation::Reserve& reserve,
-    const Option<std::string>& role,
     const Option<std::string>& principal);
 
 
 // Validates the UNRESERVE operation.
-Option<Error> validate(
-    const Offer::Operation::Unreserve& unreserve,
-    bool hasPrincipal);
+Option<Error> validate(const Offer::Operation::Unreserve& unreserve);
 
 
 // Validates the CREATE operation. We need slave's checkpointed

@@ -20,7 +20,7 @@ cmake_minimum_required(VERSION 2.8)
 
 project(Mesos)
 set(MESOS_MAJOR_VERSION 0)
-set(MESOS_MINOR_VERSION 28)
+set(MESOS_MINOR_VERSION 29)
 set(MESOS_PATCH_VERSION 0)
 set(PACKAGE_VERSION
   ${MESOS_MAJOR_VERSION}.${MESOS_MINOR_VERSION}.${MESOS_PATCH_VERSION})
@@ -43,6 +43,10 @@ option(
   FALSE
   )
 set(CMAKE_VERBOSE_MAKEFILE ${VERBOSE})
+set(
+  3RDPARTY_DEPENDENCIES "https://github.com/3rdparty/mesos-3rdparty/raw/master"
+  CACHE STRING "Pass in a URL or filesystem path that points at a mirror of the canonical third-party dependency repository (https://github.com/3rdparty/mesos-3rdparty); this will cause Mesos to build against the third-party tarballs we find in the mirror, instead of going to the Internet or building against the rebundled tarballs in the Mesos repository.\n\nThis is especially useful for Windows builds, because building on MSVC 1900 requires newer versions of ZK, glog, and libevent, than the ones rebundled in the Mesos repository, and so in that case we normally would have to go to the Internet to get them. Using this flag, however, means we can avoid this.\nNOTE: If you use this in conjunction with the `REBUNDLED` flag, then we will only go to this repository when we would go to the Internet normally; on most Unix builds, this will mean you never go to the Internet, but on Windows, it means you will in the case of glog, ZK, and libevent. To build purely against the mirror, do not use the `REBUNDLED` flag."
+  )
 
 if (REBUNDLED AND ENABLE_LIBEVENT)
   message(
@@ -78,6 +82,7 @@ endif (WIN32 AND (NOT ENABLE_LIBEVENT))
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/cmake)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/3rdparty/cmake)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/3rdparty/libprocess/cmake)
+list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/3rdparty/libprocess/3rdparty/stout/cmake)
 list(
   APPEND
   CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/3rdparty/libprocess/cmake/macros)

@@ -140,7 +140,7 @@ Future<Nothing> tar(
   argv.emplace_back(input);
 
   return launch("tar", argv)
-    .then([] () {return Nothing();});
+    .then([]() { return Nothing(); });
 }
 
 
@@ -162,7 +162,7 @@ Future<Nothing> untar(
   }
 
   return launch("tar", argv)
-    .then([] () {return Nothing();});
+    .then([]() { return Nothing(); });
 }
 
 
@@ -195,6 +195,31 @@ Future<string> sha512(const Path& input)
 
       return tokens[0];
     });
+}
+
+
+Future<Nothing> gzip(const Path& input)
+{
+  vector<string> argv = {
+    "gzip",
+    input
+  };
+
+  return launch("gzip", argv)
+    .then([]() { return Nothing(); });
+}
+
+
+Future<Nothing> decompress(const Path& input)
+{
+  vector<string> argv = {
+    "gzip",
+    "-d",  // Decompress.
+    input
+  };
+
+  return launch("gzip", argv)
+    .then([]() { return Nothing(); });
 }
 
 } // namespace command {

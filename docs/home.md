@@ -1,4 +1,5 @@
 ---
+title: Apache Mesos - Documentation Home
 layout: documentation
 ---
 
@@ -21,19 +22,20 @@ layout: documentation
   * [Docker Containerizer](docker-containerizer.md) for launching a Docker image as a Task, or as an Executor.
   * [External Containerizer](external-containerizer.md) for custom containerization implementations (deprecated).
 * [Roles](roles.md)
-* [Framework Authentication](authentication.md)
-* [Framework Authorization](authorization.md)
+* [Weights](weights.md)
+* [Authentication](authentication.md)
+* [Authorization](authorization.md)
 * [Framework Rate Limiting](framework-rate-limiting.md)
 * [Logging](logging.md)
 * [High Availability](high-availability.md) for running multiple masters simultaneously.
 * [Operational Guide](operational-guide.md)
 * [Monitoring](monitoring.md)
 * [Network Monitoring and Isolation](network-monitoring.md)
-* [Slave Recovery](slave-recovery.md) for doing seamless upgrades.
+* [Slave Recovery](slave-recovery.md) for doing seamless slave upgrades and allowing executors to survive `mesos-slave` crashes.
 * [Maintenance](maintenance.md) for performing maintenance on a Mesos cluster.
 * [Tools](tools.md) for setting up and running a Mesos cluster.
 * [SSL](ssl.md) for enabling and enforcing SSL communication.
-* [Mesos Image Provisioner](mesos-provisioner.md) for provisioning container filesystems from different image formats.
+* [Container Image](container-image.md) for supporting container images in Mesos containerizer.
 
 ## Advanced Features
 
@@ -42,8 +44,10 @@ layout: documentation
 * [Networking for Mesos-managed Containers](networking-for-mesos-managed-containers.md)
 * [Oversubscription](oversubscription.md) for how to configure Mesos to take advantage of unused resources to launch "best-effort" tasks.
 * [Persistent Volume](persistent-volume.md) for how to allow tasks to access persistent storage resources.
+* [Multiple Disks](multiple-disk.md) for how to to allow tasks to use multiple isolated disk resources.
 * [Quota](quota.md) for how to configure Mesos to provide guaranteed resource allocations for use by a role.
 * [Reservation](reservation.md) for how operators and frameworks can reserve resources on individual agents for use by a role.
+* [Replicated Log](replicated-log-internals.md) for information on the Mesos replicated log.
 
 ## Running Mesos Frameworks
 

@@ -203,6 +203,10 @@ JSON::Object model(const NetworkInfo& info)
     object.values["ip_addresses"] = std::move(array);
   }
 
+  if (info.has_name()) {
+    object.values["name"] = info.name();
+  }
+
   return object;
 }
 
@@ -353,54 +357,6 @@ JSON::Object model(const ExecutorInfo& executorInfo)
 }
 
 
-// TODO(bmahler): Expose the executor name / source.
-JSON::Object model(
-    const TaskInfo& task,
-    const FrameworkID& frameworkId,
-    const TaskState& state,
-    const vector<TaskStatus>& statuses)
-{
-  JSON::Object object;
-  object.values["id"] = task.task_id().value();
-  object.values["name"] = task.name();
-  object.values["framework_id"] = frameworkId.value();
-
-  if (task.has_executor()) {
-    object.values["executor_id"] = task.executor().executor_id().value();
-  } else {
-    object.values["executor_id"] = "";
-  }
-
-  object.values["slave_id"] = task.slave_id().value();
-  object.values["state"] = TaskState_Name(state);
-  object.values["resources"] = model(task.resources());
-
-  {
-    JSON::Array array;
-    array.values.reserve(statuses.size()); // MESOS-2353.
-
-    foreach (const TaskStatus& status, statuses) {
-      array.values.push_back(model(status));
-    }
-    object.values["statuses"] = std::move(array);
-  }
-
-  if (task.has_labels()) {
-    object.values["labels"] = std::move(model(task.labels()));
-  }
-
-  if (task.has_discovery()) {
-    object.values["discovery"] = JSON::protobuf(task.discovery());
-  }
-
-  if (task.has_container()) {
-    object.values["container"] = JSON::protobuf(task.container());
-  }
-
-  return object;
-}
-
-
 void json(JSON::ObjectWriter* writer, const Task& task)
 {
   writer->field("id", task.task_id().value());
@@ -417,11 +373,11 @@ void json(JSON::ObjectWriter* writer, const Task& task)
   }
 
   if (task.has_discovery()) {
-    writer->field("discovery", task.discovery());
+    writer->field("discovery", JSON::Protobuf(task.discovery()));
   }
 
   if (task.has_container()) {
-    writer->field("container", task.container());
+    writer->field("container", JSON::Protobuf(task.container()));
   }
 }
 
@@ -450,7 +406,7 @@ void json(JSON::ObjectWriter* writer, const Attributes& attributes)
 }
 
 
-void json(JSON::ObjectWriter* writer, const CommandInfo& command)
+static void json(JSON::ObjectWriter* writer, const CommandInfo& command)
 {
   if (command.has_shell()) {
     writer->field("shell", command.shell());
@@ -463,7 +419,7 @@ void json(JSON::ObjectWriter* writer, const CommandInfo& command)
   writer->field("argv", command.arguments());
 
   if (command.has_environment()) {
-    writer->field("environment", command.environment());
+    writer->field("environment", JSON::Protobuf(command.environment()));
   }
 
   writer->field("uris", [&command](JSON::ArrayWriter* writer) {
@@ -477,14 +433,14 @@ void json(JSON::ObjectWriter* writer, const CommandInfo& command)
 }
 
 
-void json(JSON::ObjectWriter* writer, const ContainerStatus& status)
+static void json(JSON::ObjectWriter* writer, const ContainerStatus& status)
 {
   if (status.network_infos().size() > 0) {
     writer->field("network_infos", status.network_infos());
   }
 
   if (status.has_cgroup_info()) {
-    writer->field("cgroup_info", status.cgroup_info());
+    writer->field("cgroup_info", JSON::Protobuf(status.cgroup_info()));
   }
 }
 
@@ -501,11 +457,13 @@ void json(JSON::ObjectWriter* writer, const ExecutorInfo& executorInfo)
 
 void json(JSON::ArrayWriter* writer, const Labels& labels)
 {
-  json(writer, labels.labels());
+  foreach (const Label& label, labels.labels()) {
+    writer->element(JSON::Protobuf(label));
+  }
 }
 
 
-void json(JSON::ObjectWriter* writer, const NetworkInfo& info)
+static void json(JSON::ObjectWriter* writer, const NetworkInfo& info)
 {
   if (info.has_ip_address()) {
     writer->field("ip_address", info.ip_address());
@@ -520,7 +478,15 @@ void json(JSON::ObjectWriter* writer, const NetworkInfo& info)
   }
 
   if (info.ip_addresses().size() > 0) {
-    writer->field("ip_addresses", info.ip_addresses());
+    writer->field("ip_addresses", [&info](JSON::ArrayWriter* writer) {
+      foreach (const NetworkInfo::IPAddress& ipAddress, info.ip_addresses()) {
+        writer->element(JSON::Protobuf(ipAddress));
+      }
+    });
+  }
+
+  if (info.has_name()) {
+    writer->field("name", info.name());
   }
 }
 
@@ -574,25 +540,25 @@ void json(JSON::ObjectWriter* writer, const TaskStatus& status)
 }
 
 
-void json(JSON::NumberWriter* writer, const Value::Scalar& scalar)
+static void json(JSON::NumberWriter* writer, const Value::Scalar& scalar)
 {
   writer->set(scalar.value());
 }
 
 
-void json(JSON::StringWriter* writer, const Value::Ranges& ranges)
+static void json(JSON::StringWriter* writer, const Value::Ranges& ranges)
 {
   writer->append(stringify(ranges));
 }
 
 
-void json(JSON::StringWriter* writer, const Value::Set& set)
+static void json(JSON::StringWriter* writer, const Value::Set& set)
 {
   writer->append(stringify(set));
 }
 
 
-void json(JSON::StringWriter* writer, const Value::Text& text)
+static void json(JSON::StringWriter* writer, const Value::Text& text)
 {
   writer->append(text.value());
 }

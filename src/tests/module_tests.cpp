@@ -188,9 +188,9 @@ TEST_F(ModuleTest, ExampleModuleLoadTest)
   // the sum of the passed arguments, whereas bar() returns the
   // product. baz() returns '-1' if "sum" is not specified as the
   // "operation" in the command line parameters.
-  EXPECT_EQ(module.get()->foo('A', 1024), 1089);
-  EXPECT_EQ(module.get()->bar(0.5, 10.8), 5);
-  EXPECT_EQ(module.get()->baz(5, 10), -1);
+  EXPECT_EQ(1089, module.get()->foo('A', 1024));
+  EXPECT_EQ(5, module.get()->bar(0.5, 10.8));
+  EXPECT_EQ(-1, module.get()->baz(5, 10));
 }
 
 
@@ -238,7 +238,7 @@ TEST_F(ModuleTest, ParameterWithoutKey)
   EXPECT_SOME(module);
 
   // Since there was no valid key, baz() should return -1.
-  EXPECT_EQ(module.get()->baz(5, 10), -1);
+  EXPECT_EQ(-1, module.get()->baz(5, 10));
 }
 
 
@@ -256,7 +256,7 @@ TEST_F(ModuleTest, ParameterWithInvalidKey)
   EXPECT_SOME(module);
 
   // Since there was no valid key, baz() should return -1.
-  EXPECT_EQ(module.get()->baz(5, 10), -1);
+  EXPECT_EQ(-1, module.get()->baz(5, 10));
 }
 
 
@@ -273,7 +273,7 @@ TEST_F(ModuleTest, ValidParameters)
   module = ModuleManager::create<TestModule>(DEFAULT_MODULE_NAME);
   EXPECT_SOME(module);
 
-  EXPECT_EQ(module.get()->baz(5, 10), 15);
+  EXPECT_EQ(15, module.get()->baz(5, 10));
 }
 
 
@@ -318,7 +318,7 @@ TEST_F(ModuleTest, JsonParseTest)
   module = ModuleManager::create<TestModule>(DEFAULT_MODULE_NAME);
   EXPECT_SOME(module);
 
-  EXPECT_EQ(module.get()->baz(5, 10), 15);
+  EXPECT_EQ(15, module.get()->baz(5, 10));
 }
 
 
@@ -367,9 +367,9 @@ TEST_F(ModuleTest, ModuleKindMismatch)
 // Test for correct author name, author email and library description.
 TEST_F(ModuleTest, AuthorInfoTest)
 {
-  EXPECT_STREQ(moduleBase->authorName, "Apache Mesos");
-  EXPECT_STREQ(moduleBase->authorEmail, "modules@mesos.apache.org");
-  EXPECT_STREQ(moduleBase->description, "This is a test module.");
+  EXPECT_STREQ("Apache Mesos", moduleBase->authorName);
+  EXPECT_STREQ("modules@mesos.apache.org", moduleBase->authorEmail);
+  EXPECT_STREQ("This is a test module.", moduleBase->description);
 }
 
 
@@ -444,16 +444,50 @@ TEST_F(ModuleTest, NonModuleLibrary)
 }
 
 
-// Test that loading a duplicate module fails.
-TEST_F(ModuleTest, DuplicateModule)
+// Test that loading the same module twice works.
+TEST_F(ModuleTest, LoadSameModuleTwice)
 {
-  // Add duplicate module.
-  Modules::Library* library = defaultModules.add_libraries();
-  library->set_name(DEFAULT_MODULE_LIBRARY_NAME);
-  Modules::Library::Module* module = library->add_modules();
-  module->set_name(DEFAULT_MODULE_NAME);
+  // First load the default modules.
+  EXPECT_SOME(ModuleManager::load(defaultModules));
 
-  EXPECT_ERROR(ModuleManager::load(defaultModules));
+  // Try to load the same module once again.
+  EXPECT_SOME(ModuleManager::load(defaultModules));
+}
+
+
+// Test that loading the same module twice with different parameters fails.
+TEST_F(ModuleTest, DuplicateModulesWithDifferentParameters)
+{
+  // First load the default modules.
+  EXPECT_SOME(ModuleManager::load(defaultModules));
+
+  // Create a duplicate modules object with some parameters.
+  Modules duplicateModules = getModules(
+      DEFAULT_MODULE_LIBRARY_NAME,
+      DEFAULT_MODULE_NAME,
+      "operation",
+      "X");
+
+  EXPECT_ERROR(ModuleManager::load(duplicateModules));
+}
+
+
+// Test that loading a duplicate module fails.
+TEST_F(ModuleTest, DuplicateModuleInDifferentLibraries)
+{
+  // First load the default modules.
+  EXPECT_SOME(ModuleManager::load(defaultModules));
+
+  // Create a duplicate modules object with different library name.
+  // We use the full name for library (i.e., examplemodule-X.Y.Z) to simulate
+  // the case of two libraries with the same module.
+  string library =
+    string(DEFAULT_MODULE_LIBRARY_NAME).append("-").append(MESOS_VERSION);
+
+  // Create a duplicate modules object with some parameters.
+  Modules duplicateModules = getModules(library, DEFAULT_MODULE_NAME);
+
+  EXPECT_ERROR(ModuleManager::load(duplicateModules));
 }
 
 

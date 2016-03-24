@@ -1,4 +1,5 @@
 ---
+title: Apache Mesos - Release Guide
 layout: documentation
 ---
 
@@ -26,7 +27,7 @@ This guide describes the process of doing an official release of Mesos.
 
 3. Submit your GPG public key to a keyserver, e.g., [MIT PGP Public Key Server](https://pgp.mit.edu).
 
-4. Add your GPG fingerprint to your [Apache account](https://id.apache.org/).
+4. Add your GPG fingerprint (`gpg --fingerprint <your name>`) to your [Apache account](https://id.apache.org/).
 
 5. Create a Maven settings file (`~/.m2/settings.xml`) for the Apache
    servers where you must copy your encrypted Apache password which
@@ -168,19 +169,25 @@ This guide describes the process of doing an official release of Mesos.
 
     > NOTE: Make sure you fill the email template with the names of binding voters.
 
+## Updating the wiki
+
+Update the wiki entry, [Mesos Release Planning](https://cwiki.apache.org/confluence/display/MESOS/Mesos+Release+Planning).
 
 ## Updating the website
 
 1. After a successful release, please update the website pointing to the new release.
-   See our [website README](http://svn.apache.org/repos/asf/mesos/site/) and
+   See our [website README](https://github.com/apache/mesos/blob/master/site/README.md/) and
    the general [Apache project website guide](https://www.apache.org/dev/project-site.html)
    for details on how to build and publish the website.
 
         $ svn co https://svn.apache.org/repos/asf/mesos/site mesos-site
 
-2. Write a blog post announcing the new release and its features and major bug fixes.
+2. Update doxygen and javadoc pages for the website. For more information, see
+   [website README](https://github.com/apache/mesos/blob/master/site/README.md/).
 
-3. Update the Getting Started guide to use the latest release link.
+3. Write a blog post announcing the new release and its features and major bug fixes.
+
+4. Update the Getting Started guide to use the latest release link.
 
 ## Remove old releases from svn
 
@@ -190,9 +197,10 @@ Per the guidelines [when to archive](http://www.apache.org/dev/release.html#when
 
 2. Remove all minor versions that are no longer under development and commit the change.
 
-## Set the release date
+## Release the version on JIRA
 
-1. Find the released Mesos version on https://issues.apache.org/jira/plugins/servlet/project-config/MESOS/versions, and "release" it with the correct release date.
+1. Find the released Mesos version on https://issues.apache.org/jira/plugins/servlet/project-config/MESOS/versions, and "release" it (click on "settings" --> "Release") with the correct release date.
+
 
 ## Update external tooling
 

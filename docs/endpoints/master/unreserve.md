@@ -1,6 +1,11 @@
+---
+title: Apache Mesos - HTTP Endpoints - /unreserve
+layout: documentation
+---
 <!--- This is an automatically generated file. DO NOT EDIT! --->
 
 ### USAGE ###
+>        /unreserve
 >        /master/unreserve
 
 ### TL;DR; ###
@@ -13,3 +18,8 @@ resource unreservation is done asynchronously and may fail.
 
 Please provide "slaveId" and "resources" values designating
 the resources to be unreserved.
+
+
+### AUTHENTICATION ###
+This endpoint requires authentication iff HTTP authentication is
+enabled.

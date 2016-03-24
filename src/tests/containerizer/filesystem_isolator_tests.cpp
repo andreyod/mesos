@@ -73,6 +73,7 @@ using mesos::internal::slave::LinuxFilesystemIsolatorProcess;
 using mesos::internal::slave::LinuxLauncher;
 #endif
 using mesos::internal::slave::MesosContainerizer;
+using mesos::internal::slave::MesosContainerizerProcess;
 using mesos::internal::slave::Provisioner;
 using mesos::internal::slave::ProvisionerProcess;
 using mesos::internal::slave::Slave;
@@ -294,7 +295,7 @@ TEST_F(LinuxFilesystemIsolatorTest, ROOT_ChangeRootFilesystem)
 // Also runs the command executor with the new root filesystem.
 TEST_F(LinuxFilesystemIsolatorTest, ROOT_ChangeRootFilesystemCommandExecutor)
 {
-  Try<PID<Master>> master = StartMaster();
+  Try<Owned<cluster::Master>> master = StartMaster();
   ASSERT_SOME(master);
 
   slave::Flags flags = CreateSlaveFlags();
@@ -309,12 +310,15 @@ TEST_F(LinuxFilesystemIsolatorTest, ROOT_ChangeRootFilesystemCommandExecutor)
 
   ASSERT_SOME(containerizer);
 
-  Try<PID<Slave>> slave = StartSlave(containerizer.get().get(), flags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+
+  Try<Owned<cluster::Slave>> slave =
+    StartSlave(detector.get(), containerizer.get().get(), flags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-    &sched, DEFAULT_FRAMEWORK_INFO, master.get(), DEFAULT_CREDENTIAL);
+    &sched, DEFAULT_FRAMEWORK_INFO, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Future<FrameworkID> frameworkId;
   EXPECT_CALL(sched, registered(&driver, _, _))
@@ -365,8 +369,6 @@ TEST_F(LinuxFilesystemIsolatorTest, ROOT_ChangeRootFilesystemCommandExecutor)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -376,7 +378,7 @@ TEST_F(LinuxFilesystemIsolatorTest, ROOT_ChangeRootFilesystemCommandExecutor)
 TEST_F(LinuxFilesystemIsolatorTest,
        ROOT_ChangeRootFilesystemCommandExecutorWithVolumes)
 {
-  Try<PID<Master>> master = StartMaster();
+  Try<Owned<cluster::Master>> master = StartMaster();
   ASSERT_SOME(master);
 
   slave::Flags flags = CreateSlaveFlags();
@@ -391,12 +393,15 @@ TEST_F(LinuxFilesystemIsolatorTest,
 
   ASSERT_SOME(containerizer);
 
-  Try<PID<Slave>> slave = StartSlave(containerizer.get().get(), flags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+
+  Try<Owned<cluster::Slave>> slave =
+    StartSlave(detector.get(), containerizer.get().get(), flags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-    &sched, DEFAULT_FRAMEWORK_INFO, master.get(), DEFAULT_CREDENTIAL);
+    &sched, DEFAULT_FRAMEWORK_INFO, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Future<FrameworkID> frameworkId;
   EXPECT_CALL(sched, registered(&driver, _, _))
@@ -466,8 +471,6 @@ TEST_F(LinuxFilesystemIsolatorTest,
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 
@@ -476,7 +479,7 @@ TEST_F(LinuxFilesystemIsolatorTest,
 TEST_F(LinuxFilesystemIsolatorTest,
        ROOT_ChangeRootFilesystemCommandExecutorPersistentVolume)
 {
-  Try<PID<Master>> master = StartMaster();
+  Try<Owned<cluster::Master>> master = StartMaster();
   ASSERT_SOME(master);
 
   slave::Flags flags = CreateSlaveFlags();
@@ -496,7 +499,10 @@ TEST_F(LinuxFilesystemIsolatorTest,
 
   ASSERT_SOME(containerizer);
 
-  Try<PID<Slave>> slave = StartSlave(containerizer.get().get(), flags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+
+  Try<Owned<cluster::Slave>> slave =
+    StartSlave(detector.get(), containerizer.get().get(), flags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
@@ -504,17 +510,15 @@ TEST_F(LinuxFilesystemIsolatorTest,
   frameworkInfo.set_role("role1");
 
   MesosSchedulerDriver driver(
-    &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+    &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Future<FrameworkID> frameworkId;
   EXPECT_CALL(sched, registered(&driver, _, _))
     .WillOnce(FutureArg<1>(&frameworkId));
 
   Future<vector<Offer>> offers;
-  Future<vector<Offer>> offers2;
   EXPECT_CALL(sched, resourceOffers(&driver, _))
     .WillOnce(FutureArg<1>(&offers))
-    .WillOnce(FutureArg<1>(&offers2))
     .WillRepeatedly(Return()); // Ignore subsequent offers.
 
   driver.start();
@@ -525,8 +529,6 @@ TEST_F(LinuxFilesystemIsolatorTest,
   ASSERT_NE(0u, offers.get().size());
 
   Offer offer = offers.get()[0];
-
-  SlaveID slaveId = offer.slave_id();
 
   const string dir1 = path::join(os::getcwd(), "dir1");
   ASSERT_SOME(os::mkdir(dir1));
@@ -597,8 +599,153 @@ TEST_F(LinuxFilesystemIsolatorTest,
 
   driver.stop();
   driver.join();
+}
 
-  Shutdown();
+
+// This test verifies that persistent volumes are unmounted properly
+// after a checkpointed framework disappears and the slave restarts.
+//
+// TODO(jieyu): Even though the command task specifies a new
+// filesystem root, the executor (command executor) itself does not
+// change filesystem root (uses the host filesystem). We need to add a
+// test to test the scenario that the executor itself changes rootfs.
+TEST_F(LinuxFilesystemIsolatorTest, ROOT_RecoverOrphanedPersistentVolume)
+{
+  Try<Owned<cluster::Master>> master = StartMaster();
+  ASSERT_SOME(master);
+
+  slave::Flags flags = CreateSlaveFlags();
+  flags.image_provisioner_backend = "copy";
+  flags.resources = "cpus:2;mem:1024;disk(role1):1024";
+  flags.isolation = "posix/disk,filesystem/linux";
+
+  ContainerID containerId;
+  containerId.set_value(UUID::random().toString());
+
+  Try<Owned<MesosContainerizer>> containerizer = createContainerizer(
+      flags,
+      {{"test_image", path::join(os::getcwd(), "test_image")}});
+
+  ASSERT_SOME(containerizer);
+
+  Owned<MasterDetector> detector = master.get()->createDetector();
+
+  Try<Owned<cluster::Slave>> slave =
+    StartSlave(detector.get(), containerizer.get().get(), flags);
+  ASSERT_SOME(slave);
+
+  MockScheduler sched;
+  FrameworkInfo frameworkInfo = DEFAULT_FRAMEWORK_INFO;
+  frameworkInfo.set_role("role1");
+  frameworkInfo.set_checkpoint(true);
+
+  MesosSchedulerDriver driver(
+    &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
+
+  Future<FrameworkID> frameworkId;
+  EXPECT_CALL(sched, registered(&driver, _, _))
+    .WillOnce(FutureArg<1>(&frameworkId));
+
+  Future<vector<Offer>> offers;
+  EXPECT_CALL(sched, resourceOffers(&driver, _))
+    .WillOnce(FutureArg<1>(&offers))
+    .WillRepeatedly(Return()); // Ignore subsequent offers.
+
+  driver.start();
+
+  AWAIT_READY(frameworkId);
+
+  AWAIT_READY(offers);
+  EXPECT_FALSE(offers.get().empty());
+
+  Offer offer = offers.get()[0];
+
+  const string dir1 = path::join(os::getcwd(), "dir1");
+  ASSERT_SOME(os::mkdir(dir1));
+
+  Resource persistentVolume = createPersistentVolume(
+      Megabytes(64),
+      "role1",
+      "id1",
+      "path1");
+
+  // Create a task that does nothing for a long time.
+  TaskInfo task = createTask(
+      offer.slave_id(),
+      Resources::parse("cpus:1;mem:512").get() + persistentVolume,
+      "sleep 1000");
+
+  ContainerInfo containerInfo;
+  Image* image = containerInfo.mutable_mesos()->mutable_image();
+  image->set_type(Image::APPC);
+  image->mutable_appc()->set_name("test_image");
+  containerInfo.set_type(ContainerInfo::MESOS);
+
+  // We are assuming the image created by the tests have /tmp to be
+  // able to mount the directory.
+  containerInfo.add_volumes()->CopyFrom(
+      createVolumeFromHostPath("/tmp", dir1, Volume::RW));
+  task.mutable_container()->CopyFrom(containerInfo);
+
+  Future<TaskStatus> status;
+  EXPECT_CALL(sched, statusUpdate(&driver, _))
+    .WillOnce(FutureArg<1>(&status))
+    .WillRepeatedly(DoDefault());
+
+  Future<Nothing> ack =
+    FUTURE_DISPATCH(_, &Slave::_statusUpdateAcknowledgement);
+
+  // Create the persistent volumes and launch task via `acceptOffers`.
+  driver.acceptOffers(
+      {offer.id()},
+      {CREATE(persistentVolume), LAUNCH({task})});
+
+  AWAIT_READY(status);
+  EXPECT_EQ(TASK_RUNNING, status.get().state());
+
+  // Wait for the ACK to be checkpointed.
+  AWAIT_READY(ack);
+
+  // Restart the slave.
+  slave.get()->terminate();
+
+  // Wipe the slave meta directory so that the slave will treat the
+  // above running task as an orphan.
+  ASSERT_SOME(os::rmdir(slave::paths::getMetaRootDir(flags.work_dir)));
+
+  // Recreate the containerizer using the same helper as above.
+  containerizer = createContainerizer(
+      flags,
+      {{"test_image", path::join(os::getcwd(), "test_image")}});
+
+  slave = StartSlave(detector.get(), containerizer.get().get(), flags);
+  ASSERT_SOME(slave);
+
+  // Wait until slave recovery is complete.
+  Future<Nothing> _recover = FUTURE_DISPATCH(_, &Slave::_recover);
+  AWAIT_READY(_recover);
+
+  // Wait until the containerizer's recovery is done too.
+  // This is called once orphans are cleaned up.  But this future is not
+  // directly tied to the `Slave::_recover` future above.
+  _recover = FUTURE_DISPATCH(_, &MesosContainerizerProcess::___recover);
+  AWAIT_READY(_recover);
+
+  Try<fs::MountInfoTable> table = fs::MountInfoTable::read();
+  ASSERT_SOME(table);
+
+  // All mount targets should be under this directory.
+  const string directory = slave::paths::getSandboxRootDir(flags.work_dir);
+
+  // Verify that the orphaned container's persistent volume and
+  // the rootfs are unmounted.
+  foreach (const fs::MountInfoTable::Entry& entry, table.get().entries) {
+    EXPECT_FALSE(strings::contains(entry.target, directory))
+      << "Target was not unmounted: " << entry.target;
+  }
+
+  driver.stop();
+  driver.join();
 }
 
 
@@ -1051,7 +1198,7 @@ TEST_F(LinuxFilesystemIsolatorTest, ROOT_ImageInVolumeWithRootFilesystem)
 
   // Wait for the launch to complete.
   // Need to wait for Rootfs copy.
-  AWAIT_READY_FOR(launch, Seconds(120));
+  AWAIT_READY_FOR(launch, Seconds(240));
 
   // Wait on the container.
   Future<containerizer::Termination> wait =
@@ -1135,7 +1282,7 @@ TEST_F(LinuxFilesystemIsolatorTest, ROOT_MultipleContainers)
 
   // Wait for the launch to complete.
   // Need to wait for Rootfs copy.
-  AWAIT_READY_FOR(launch1, Seconds(60));
+  AWAIT_READY_FOR(launch1, Seconds(120));
 
   // Now launch container 2 which will copy the host mount table with
   // container 1's work directory mount in it.
@@ -1172,8 +1319,8 @@ TEST_F(LinuxFilesystemIsolatorTest, ROOT_MultipleContainers)
   Future<containerizer::Termination> wait2 =
     containerizer.get()->wait(containerId2);
 
-  AWAIT_READY(wait1);
-  AWAIT_READY(wait2);
+  AWAIT_READY_FOR(wait1, Seconds(60));
+  AWAIT_READY_FOR(wait2, Seconds(60));
 
   // Executor 1 was forcefully killed.
   EXPECT_TRUE(wait1.get().has_status());
@@ -1312,7 +1459,7 @@ TEST_F(LinuxFilesystemIsolatorTest, ROOT_VolumeUsageExceedsSandboxQuota)
   FrameworkInfo frameworkInfo = DEFAULT_FRAMEWORK_INFO;
   frameworkInfo.set_role("role1");
 
-  Try<PID<Master>> master = StartMaster();
+  Try<Owned<cluster::Master>> master = StartMaster();
   ASSERT_SOME(master);
 
   slave::Flags flags = CreateSlaveFlags();
@@ -1324,12 +1471,14 @@ TEST_F(LinuxFilesystemIsolatorTest, ROOT_VolumeUsageExceedsSandboxQuota)
   flags.enforce_container_disk_quota = true;
   flags.resources = "cpus:2;mem:128;disk(role1):128";
 
-  Try<PID<Slave>> slave = StartSlave(flags);
+  Owned<MasterDetector> detector = master.get()->createDetector();
+
+  Try<Owned<cluster::Slave>> slave = StartSlave(detector.get(), flags);
   ASSERT_SOME(slave);
 
   MockScheduler sched;
   MesosSchedulerDriver driver(
-      &sched, frameworkInfo, master.get(), DEFAULT_CREDENTIAL);
+      &sched, frameworkInfo, master.get()->pid, DEFAULT_CREDENTIAL);
 
   Future<FrameworkID> frameworkId;
   EXPECT_CALL(sched, registered(&driver, _, _))
@@ -1387,8 +1536,6 @@ TEST_F(LinuxFilesystemIsolatorTest, ROOT_VolumeUsageExceedsSandboxQuota)
 
   driver.stop();
   driver.join();
-
-  Shutdown();
 }
 
 #endif // __linux__

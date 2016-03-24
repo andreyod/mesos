@@ -99,10 +99,10 @@ Future<Option<ContainerLaunchInfo>> DockerRuntimeIsolatorProcess::prepare(
     getWorkingDirectory(containerConfig);
 
   Result<CommandInfo> command =
-    getExecutorLaunchCommand(containerId, containerConfig);
+    getLaunchCommand(containerId, containerConfig);
 
   if (command.isError()) {
-    return Failure("Failed to determine the executor launch command: " +
+    return Failure("Failed to determine the launch command: " +
                    command.error());
   }
 
@@ -196,9 +196,9 @@ Option<Environment> DockerRuntimeIsolatorProcess::getLaunchEnvironment(
 // This method reads the CommandInfo form ExecutorInfo and optional
 // TaskInfo, and merge them with docker image default Entrypoint and
 // Cmd. It returns a merged CommandInfo which will be used to launch
-// the executor. If no need to modify the command, this method will
-// return none.
-Result<CommandInfo> DockerRuntimeIsolatorProcess::getExecutorLaunchCommand(
+// the docker container. If no need to modify the command, this method
+// will return none.
+Result<CommandInfo> DockerRuntimeIsolatorProcess::getLaunchCommand(
     const ContainerID& containerId,
     const ContainerConfig& containerConfig)
 {
@@ -327,7 +327,21 @@ Result<CommandInfo> DockerRuntimeIsolatorProcess::getExecutorLaunchCommand(
     }
   } else if (config.cmd_size() > 0) {
     command.set_value(config.cmd(0));
+
+    // Put user defined argv after default cmd[0].
+    command.clear_arguments();
     command.add_arguments(config.cmd(0));
+
+    // Append all possible user argv after cmd[0].
+    if (!containerConfig.has_task_info()) {
+      // Custom executor case.
+      command.mutable_arguments()->MergeFrom(
+          containerConfig.executor_info().command().arguments());
+    } else {
+      // Command task case.
+      command.mutable_arguments()->MergeFrom(
+          containerConfig.task_info().command().arguments());
+    }
 
     // Overwrite default cmd arguments if CommandInfo arguments
     // are set by user.
@@ -349,7 +363,10 @@ Option<string> DockerRuntimeIsolatorProcess::getWorkingDirectory(
 {
   CHECK(containerConfig.docker().manifest().has_config());
 
-  if (!containerConfig.docker().manifest().config().has_workingdir()) {
+  // NOTE: In docker manifest, if an image working directory is none,
+  // it will be set as `"WorkingDir": ""`.
+  if (!containerConfig.docker().manifest().config().has_workingdir() ||
+      containerConfig.docker().manifest().config().workingdir() == "") {
     return None();
   }
 

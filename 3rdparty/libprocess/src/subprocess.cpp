@@ -189,7 +189,7 @@ Subprocess::IO Subprocess::FD(int fd, IO::FDType type)
 
           // NOTE: By not setting a default we leverage the compiler
           // errors when the enumeration is augmented to find all
-          // the cases we need to provide.  Same for below.
+          // the cases we need to provide. Same for below.
         }
 
         if (prepared_fd == -1) {
@@ -239,7 +239,7 @@ static pid_t defaultClone(const lambda::function<int()>& func)
 
 
 // The main entry of the child process. Note that this function has to
-// be async singal safe.
+// be async signal safe.
 static int childMain(
     const string& path,
     char** argv,
@@ -452,6 +452,12 @@ Try<Subprocess> subprocess(
   // us and we needed to allocate the space.
   if (environment.isSome()) {
     CHECK_NE(os::raw::environment(), envp);
+
+    // We ignore the last 'envp' entry since it is NULL.
+    for (size_t index = 0; index < environment->size(); index++) {
+      delete[] envp[index];
+    }
+
     delete[] envp;
   }
 

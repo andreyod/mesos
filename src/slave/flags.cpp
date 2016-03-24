@@ -27,6 +27,7 @@
 
 #include "slave/constants.hpp"
 
+using std::string;
 
 mesos::internal::slave::Flags::Flags()
 {
@@ -110,23 +111,19 @@ mesos::internal::slave::Flags::Flags()
   add(&Flags::image_provisioner_backend,
       "image_provisioner_backend",
       "Strategy for provisioning container rootfs from images,\n"
-      "e.g., `bind`, `copy`.",
+      "e.g., `bind`, `copy`, `overlay`.",
       "copy");
+
+  add(&Flags::appc_simple_discovery_uri_prefix,
+      "appc_simple_discovery_uri_prefix",
+      "URI prefix to be used for simple discovery of appc images,\n"
+      "e.g., 'http://', 'https://', 'hdfs://<hostname>:9000/user/abc/cde'.",
+      "http://");
 
   add(&Flags::appc_store_dir,
       "appc_store_dir",
       "Directory the appc provisioner will store images in.\n",
       "/tmp/mesos/store/appc");
-
-  add(&Flags::docker_auth_server,
-      "docker_auth_server",
-      "Docker authentication server used to authenticate with Docker registry",
-      "https://auth.docker.io");
-
-  add(&Flags::docker_puller_timeout_secs,
-      "docker_puller_timeout",
-      "Timeout in seconds for pulling images from the Docker registry",
-      "60");
 
   add(&Flags::docker_registry,
       "docker_registry",
@@ -180,8 +177,8 @@ mesos::internal::slave::Flags::Flags()
 
   add(&Flags::launcher_dir, // TODO(benh): This needs a better name.
       "launcher_dir",
-      "Directory path of Mesos binaries. Mesos would find health-check,\n"
-      "fetcher, containerizer and executor binary files under this\n"
+      "Directory path of Mesos binaries. Mesos looks for the health-check,\n"
+      "fetcher, containerizer, and executor binary files under this\n"
       "directory.",
       PKGLIBEXECDIR);
 
@@ -214,7 +211,7 @@ mesos::internal::slave::Flags::Flags()
 
   add(&Flags::registration_backoff_factor,
       "registration_backoff_factor",
-      "slave initially picks a random amount of time between `[0, b]`, where\n"
+      "Slave initially picks a random amount of time between `[0, b]`, where\n"
       "`b = registration_backoff_factor`, to (re-)register with a new master.\n"
       "Subsequent retries are exponentially backed off based on this\n"
       "interval (e.g., 1st retry uses a random value between `[0, b * 2^1]`,\n"
@@ -256,7 +253,7 @@ mesos::internal::slave::Flags::Flags()
       "executor_shutdown_grace_period",
       "Amount of time to wait for an executor\n"
       "to shut down (e.g., 60secs, 3mins, etc)",
-      EXECUTOR_SHUTDOWN_GRACE_PERIOD);
+      DEFAULT_EXECUTOR_SHUTDOWN_GRACE_PERIOD);
 
   add(&Flags::gc_delay,
       "gc_delay",
@@ -350,6 +347,12 @@ mesos::internal::slave::Flags::Flags()
       "A non-zero, 16-bit handle of the form `0xAAAA`. This will be \n"
       "used as the primary handle for the net_cls cgroup.");
 
+  add(&Flags::cgroups_net_cls_secondary_handles,
+      "cgroups_net_cls_secondary_handles",
+      "A range of the form 0xAAAA,0xBBBB, specifying the valid secondary\n"
+      "handles that can be used with the primary handle. This will take\n"
+      "effect only when the `--cgroups_net_cls_primary_handle is set.");
+
   add(&Flags::slave_subsystems,
       "slave_subsystems",
       "List of comma-separated cgroup subsystems to run the slave binary\n"
@@ -417,7 +420,7 @@ mesos::internal::slave::Flags::Flags()
       "  \"disabled_endpoints\": {\n"
       "    \"paths\": [\n"
       "      \"/files/browse\",\n"
-      "      \"/slave(0)/stats.json\"\n"
+      "      \"/metrics/snapshot\"\n"
       "    ]\n"
       "  }\n"
       "}");
@@ -425,10 +428,10 @@ mesos::internal::slave::Flags::Flags()
   add(&Flags::credential,
       "credential",
       "Either a path to a text with a single line\n"
-      "containing `principal` and `secret` separated by "
-      "whitespace.\n"
+      "containing `principal` and `secret` separated by whitespace.\n"
       "Or a path containing the JSON-formatted "
       "information used for one credential.\n"
+      "This credential is used to identify the slave to the master.\n"
       "Path could be of the form `file:///path/to/file` or `/path/to/file`."
       "\n"
       "Example:\n"
@@ -479,7 +482,7 @@ mesos::internal::slave::Flags::Flags()
 
   add(&Flags::docker_mesos_image,
       "docker_mesos_image",
-      "The docker image used to launch this mesos slave instance.\n"
+      "The Docker image used to launch this Mesos slave instance.\n"
       "If an image is specified, the docker containerizer assumes the slave\n"
       "is running in a docker container, and launches executors with\n"
       "docker containers in order to recover them when the slave restarts and\n"
@@ -581,7 +584,29 @@ mesos::internal::slave::Flags::Flags()
       "isolator.",
       false);
 
+  add(&Flags::network_enable_snmp_statistics,
+      "network_enable_snmp_statistics",
+      "Whether to collect SNMP statistics details (e.g., TCPRetransSegs) for\n"
+      "each container. This flag is used for the 'network/port_mapping'\n"
+      "isolator.",
+      false);
+
 #endif // WITH_NETWORK_ISOLATOR
+
+  add(&Flags::network_cni_plugins_dir,
+      "network_cni_plugins_dir",
+      "Directory path of the CNI plugin binaries. The `network/cni`\n"
+      "isolator will find CNI plugins under this directory so that\n"
+      "it can execute the plugins to add/delete container from the CNI\n"
+      "networks. It is the operator’s responsibility to install the CNI\n"
+      "plugin binaries in the specified directory.");
+
+  add(&Flags::network_cni_config_dir,
+      "network_cni_config_dir",
+      "Directory path of the CNI network configuration files. For each\n"
+      "network that containers launched in Mesos agent can connect to,\n"
+      "the operator should install a network configuration file in JSON\n"
+      "format in the specified directory.");
 
   add(&Flags::container_disk_watch_interval,
       "container_disk_watch_interval",
@@ -647,11 +672,41 @@ mesos::internal::slave::Flags::Flags()
   add(&Flags::authenticatee,
       "authenticatee",
       "Authenticatee implementation to use when authenticating against the\n"
-      "master. Use the default `" +
-        DEFAULT_AUTHENTICATEE +
-        "`, or\n"
-        "load an alternate authenticatee module using `--modules`.",
+      "master. Use the default `" + string(DEFAULT_AUTHENTICATEE) + "`, or\n"
+      "load an alternate authenticatee module using `--modules`.",
       DEFAULT_AUTHENTICATEE);
+
+  add(&Flags::http_authenticators,
+      "http_authenticators",
+      "HTTP authenticator implementation to use when handling requests to\n"
+      "authenticated endpoints. Use the default\n"
+      "`" + string(DEFAULT_HTTP_AUTHENTICATOR) + "`, or load an alternate\n"
+      "HTTP authenticator module using `--modules`.\n"
+      "\n"
+      "Currently there is no support for multiple HTTP authenticators.",
+      DEFAULT_HTTP_AUTHENTICATOR);
+
+  add(&Flags::authenticate_http,
+      "authenticate_http",
+      "If `true`, only authenticated requests for HTTP endpoints supporting\n"
+      "authentication are allowed. If `false`, unauthenticated requests to\n"
+      "HTTP endpoints are also allowed.",
+      false);
+
+  add(&Flags::http_credentials,
+      "http_credentials",
+      "Path to a JSON-formatted file containing credentials used to\n"
+      "authenticate HTTP endpoints on the slave.\n"
+      "Path can be of the form `file:///path/to/file` or `/path/to/file`.\n"
+      "Example:\n"
+      "{\n"
+      "  \"credentials\": [\n"
+      "    {\n"
+      "      \"principal\": \"yoda\",\n"
+      "      \"secret\": \"usetheforce\"\n"
+      "    }\n"
+      "  ]\n"
+      "}");
 
   add(&Flags::hooks,
       "hooks",

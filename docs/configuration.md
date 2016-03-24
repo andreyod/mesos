@@ -1,4 +1,5 @@
 ---
+title: Apache Mesos - Configuration
 layout: documentation
 ---
 
@@ -50,9 +51,9 @@ be found by running the binary with the flag `--help`, for example
     --advertise_ip=VALUE
   </td>
   <td>
-IP address advertised to reach mesos master/slave.
-Mesos master/slave does not bind using this IP address.
-However, this IP address may be used to access Mesos master/slave.
+IP address advertised to reach this Mesos master/slave.
+The master/slave does not bind to this IP address.
+However, this IP address may be used to access this master/slave.
   </td>
 </tr>
 <tr>
@@ -60,10 +61,20 @@ However, this IP address may be used to access Mesos master/slave.
     --advertise_port=VALUE
   </td>
   <td>
-Port advertised to reach mesos master/slave (along with
-<code>advertise_ip</code>). Mesos master/slave does not bind using this port.
+Port advertised to reach this Mesos master/slave (along with
+<code>advertise_ip</code>). The master/slave does not bind using this port.
 However, this port (along with <code>advertise_ip</code>) may be used to
 access Mesos master/slave.
+  </td>
+</tr>
+<tr>
+  <td>
+    --[no-]authenticate_http
+  </td>
+  <td>
+If <code>true</code>, only authenticated requests for HTTP endpoints supporting
+authentication are allowed. If <code>false</code>, unauthenticated requests to
+HTTP endpoints are also allowed. (default: false)
   </td>
 </tr>
 <tr>
@@ -83,7 +94,7 @@ Example:
   "disabled_endpoints" : {
     "paths" : [
       "/files/browse",
-      "/slave(0)/stats.json"
+      "/metrics/snapshot"
     ]
   }
 }</code></pre>
@@ -95,6 +106,19 @@ Example:
   </td>
   <td>
 Show the help message and exit. (default: false)
+  </td>
+</tr>
+<tr>
+  <td>
+    --http_authenticators=VALUE
+  </td>
+  <td>
+HTTP authenticator implementation to use when handling requests to
+authenticated endpoints. Use the default
+<code>basic</code>, or load an alternate
+HTTP authenticator module using <code>--modules</code>.
+<p/>
+Currently there is no support for multiple HTTP authenticators. (default: basic)
   </td>
 </tr>
 <tr>
@@ -444,17 +468,6 @@ If <code>true</code>, only authenticated frameworks are allowed to register. If
 </tr>
 <tr>
   <td>
-    --[no-]authenticate_http
-  </td>
-  <td>
-If <code>true</code> only authenticated requests for HTTP endpoints supporting
-authentication are allowed.
-If <code>false</code> unauthenticated HTTP endpoint requests are also allowed.
-(default: false)
-  </td>
-</tr>
-<tr>
-  <td>
     --[no-]authenticate_slaves
   </td>
   <td>
@@ -505,7 +518,7 @@ Human readable name for the cluster, displayed in the webui.
 Either a path to a text file with a list of credentials,
 each line containing <code>principal</code> and <code>secret</code> separated by whitespace,
 or, a path to a JSON-formatted file containing credentials.
-Path could be of the form <code>file:///path/to/file</code> or <code>/path/to/file</code>.
+Path can be of the form <code>file:///path/to/file</code> or <code>/path/to/file</code>.
 JSON file Example:
 <pre><code>{
   "credentials": [
@@ -531,24 +544,11 @@ are the same as for user_allocator. (default: drf)
 </tr>
 <tr>
   <td>
-    --http_authenticators=VALUE
-  </td>
-  <td>
-HTTP authenticator implementation to use when handling requests to
-authenticated endpoints. Use the default
-<code>basic</code>, or load an alternate HTTP
-authenticator module using <code>--modules</code>.
-<p/>
-Currently there is no support for multiple HTTP authenticators. (default: basic)
-  </td>
-</tr>
-<tr>
-  <td>
     --[no-]log_auto_initialize
   </td>
   <td>
-Whether to automatically initialize the replicated log used for the
-registry. If this is set to false, the log has to be manually
+Whether to automatically initialize the [replicated log](replicated-log-internals.md)
+used for the registry. If this is set to false, the log has to be manually
 initialized when used for the very first time. (default: true)
   </td>
 </tr>
@@ -588,6 +588,7 @@ ping from the master. Slaves that do not respond within
 Duration of time before an offer is rescinded from a framework.
 This helps fairness when running frameworks that hold on to offers,
 or frameworks that accidentally drop offers.
+If not set, offers do not timeout.
   </td>
 </tr>
 <tr>
@@ -756,9 +757,11 @@ Directory path of the webui files/assets (default: /usr/local/share/mesos/webui)
     --weights=VALUE
   </td>
   <td>
-A comma-separated list of role/weight pairs
-of the form <code>role=weight,role=weight</code>. Weights
-are used to indicate forms of priority.
+A comma-separated list of role/weight pairs of the form
+<code>role=weight,role=weight</code>. Weights can be used to control the
+relative share of cluster resources that is offered to different roles. This
+flag is deprecated. Instead, operators should configure weights dynamically
+using the <code>/weights</code> HTTP endpoint.
   </td>
 </tr>
 <tr>
@@ -925,6 +928,16 @@ the primary handle for the net_cls cgroup.
 </tr>
 <tr>
   <td>
+    --cgroups_net_cls_secondary_handles
+  </td>
+  <td>
+A range of the form 0xAAAA,0xBBBB, specifying the valid secondary
+handles that can be used with the primary handle. This will take
+effect only when the <code>--cgroups_net_cls_primary_handle</code> is set.
+  </td>
+</tr>
+<tr>
+  <td>
     --cgroups_root=VALUE
   </td>
   <td>
@@ -981,6 +994,7 @@ are specified is the order they are tried.
 Either a path to a text with a single line
 containing <code>principal</code> and <code>secret</code> separated by whitespace.
 Or a path containing the JSON-formatted information used for one credential.
+This credential is used to identify the slave to the master.
 Path could be of the form <code>file:///path/to/file</code> or <code>/path/to/file</code>.
 Example:
 <pre><code>{
@@ -1057,15 +1071,6 @@ containerizer.
 </tr>
 <tr>
   <td>
-    --docker_auth_server=VALUE
-  </td>
-  <td>
-Docker authentication server used to authenticate with Docker registry
-(default: https://auth.docker.io)
-  </td>
-</tr>
-<tr>
-  <td>
     --[no-]docker_kill_orphans
   </td>
   <td>
@@ -1081,19 +1086,11 @@ removing docker tasks launched by other slaves.
     --docker_mesos_image=VALUE
   </td>
   <td>
-The docker image used to launch this mesos slave instance.
+The Docker image used to launch this Mesos slave instance.
 If an image is specified, the docker containerizer assumes the slave
 is running in a docker container, and launches executors with
 docker containers in order to recover them when the slave restarts and
 recovers.
-  </td>
-</tr>
-<tr>
-  <td>
-    --docker_puller_timeout=VALUE
-  </td>
-  <td>
-Timeout in seconds for pulling images from the Docker registry (default: 60secs)
   </td>
 </tr>
 <tr>
@@ -1226,6 +1223,7 @@ the available disk usage. (default: 1weeks)
 </tr>
 <tr>
   <td>
+    <a name="gc_disk_headroom"></a>
     --gc_disk_headroom=VALUE
   </td>
   <td>
@@ -1245,6 +1243,27 @@ Path to find Hadoop installed (for
 fetching framework executors from HDFS)
 (no default, look for <code>HADOOP_HOME</code> in
 environment or find hadoop on <code>PATH</code>) (default: )
+  </td>
+</tr>
+<tr>
+  <td>
+    --http_credentials=VALUE
+  </td>
+  <td>
+Path to a JSON-formatted file containing credentials. These
+credentials are used to authenticate HTTP endpoints on the slave.
+Path can be of the form <code>file:///path/to/file</code> or <code>/path/to/file</code>.
+<p/>
+Example:
+<pre><code>{
+  "credentials": [
+    {
+      "principal": "yoda",
+      "secret": "usetheforce"
+    }
+  ]
+}
+</code></pre>
   </td>
 </tr>
 <tr>
@@ -1295,9 +1314,30 @@ launcher if it's running as root on Linux.
     --launcher_dir=VALUE
   </td>
   <td>
-Directory path of Mesos binaries. Mesos would find health-check,
-fetcher, containerizer and executor binary files under this
+Directory path of Mesos binaries. Mesos looks for the health-check,
+fetcher, containerizer, and executor binary files under this
 directory. (default: /usr/local/libexec/mesos)
+  </td>
+</tr>
+<tr>
+  <td>
+    --network_cni_plugins_dir=VALUE
+  </td>
+  <td>
+Directory path of the CNI plugin binaries. The <code>network/cni</code>
+isolator will find CNI plugins under this directory so that it can execute
+the plugins to add/delete container from the CNI networks. It is the operator’s
+responsibility to install the CNI plugin binaries in the specified directory.
+  </td>
+</tr>
+<tr>
+  <td>
+    --network_cni_config_dir=VALUE
+  </td>
+  <td>
+Directory path of the CNI network configuration files. For each network that
+containers launched in Mesos agent can connect to, the operator should install
+a network configuration file in JSON format in the specified directory.
   </td>
 </tr>
 <tr>
@@ -1634,6 +1674,16 @@ each container. This flag is used for the <code>network/port_mapping</code>
 isolator. (default: false)
   </td>
 </tr>
+<tr>
+  <td>
+    --[no-]network_enable_snmp_statistics
+  </td>
+  <td>
+Whether to collect SNMP statistics details (e.g., TCPRetransSegs) for
+each container. This flag is used for the 'network/port_mapping'
+isolator. (default: false)
+  </td>
+</tr>
 </table>
 
 
@@ -1690,6 +1740,17 @@ isolator. (default: false)
       this port will not actually be bound (the local LIBPROCESS_PORT
       will be), so redirection to the local IP and port must be
       provided separately.
+    </td>
+  </tr>
+  <tr>
+    <td>
+      LIBPROCESS_METRICS_SNAPSHOT_ENDPOINT_RATE_LIMIT
+    </td>
+    <td>
+      If set, this variable can be used to configure the rate limit
+      applied to the /metrics/snapshot endpoint. The format is
+      `<number of requests>/<interval duration>`.
+      Examples: `10/1secs`, `100/10secs`, etc.
     </td>
   </tr>
 </table>

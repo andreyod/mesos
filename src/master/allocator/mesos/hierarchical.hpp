@@ -23,15 +23,16 @@
 
 #include <process/future.hpp>
 #include <process/id.hpp>
-#include <process/metrics/gauge.hpp>
-#include <process/metrics/metrics.hpp>
 
 #include <stout/duration.hpp>
 #include <stout/hashmap.hpp>
 #include <stout/hashset.hpp>
+#include <stout/lambda.hpp>
 #include <stout/option.hpp>
 
 #include "master/allocator/mesos/allocator.hpp"
+#include "master/allocator/mesos/metrics.hpp"
+
 #include "master/allocator/sorter/drf/sorter.hpp"
 
 #include "master/constants.hpp"
@@ -187,6 +188,9 @@ public:
   void removeQuota(
       const std::string& role);
 
+  void updateWeights(
+      const std::vector<WeightInfo>& weightInfos);
+
 protected:
   // Useful typedefs for dispatch/delay/defer to self()/this.
   typedef HierarchicalAllocatorProcess Self;
@@ -260,23 +264,8 @@ protected:
       void(const FrameworkID&,
            const hashmap<SlaveID, UnavailableResources>&)> inverseOfferCallback;
 
-  struct Metrics
-  {
-    explicit Metrics(const Self& process)
-      : event_queue_dispatches(
-            "allocator/event_queue_dispatches",
-            process::defer(process.self(), &Self::_event_queue_dispatches))
-    {
-      process::metrics::add(event_queue_dispatches);
-    }
-
-    ~Metrics()
-    {
-      process::metrics::remove(event_queue_dispatches);
-    }
-
-    process::metrics::Gauge event_queue_dispatches;
-  } metrics;
+  friend Metrics;
+  Metrics metrics;
 
   struct Framework
   {
@@ -297,6 +286,14 @@ protected:
   {
     return static_cast<double>(eventCount<process::DispatchEvent>());
   }
+
+  double _resources_total(const std::string& resource);
+
+  double _resources_offered_or_allocated(const std::string& resource);
+
+  double _quota_allocated(
+      const std::string& role,
+      const std::string& resource);
 
   hashmap<FrameworkID, Framework> frameworks;
 
@@ -367,7 +364,7 @@ protected:
   // Number of registered frameworks for each role. When a role's active
   // count drops to zero, it is removed from this map; the role is also
   // removed from `roleSorter` and its `frameworkSorter` is deleted.
-  hashmap<std::string, int> activeRoles;
+  hashmap<std::string, size_t> activeRoles;
 
   // Configured weight for each role, if any; if a role does not
   // appear here, it has the default weight of 1.
